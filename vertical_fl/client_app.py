@@ -31,7 +31,7 @@ class TextFlowerClient(NumPyClient):
         text_inputs = self.processor(text=self.data, return_tensors="pt", padding=True, truncation=True)
         text_embeddings = self.model(**text_inputs)
 
-        grad_tensor = torch.from_numpy(parameters[0])
+        grad_tensor = torch.from_numpy(parameters[1])
         text_embeddings.backward(grad_tensor)
         self.optimizer.step()
 

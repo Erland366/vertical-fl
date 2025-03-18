@@ -29,57 +29,60 @@ class CLIPFederatedStrategy(fl.server.strategy.FedAvg):
         if not self.accept_failures and failures:
             return None, {}
             
-        
+        # Get client embeddings
         embedding_results = {}
+        original_shapes = {}
+        
         for _, fit_res in results:
-            client_type = fit_res.metrics["client-type"] # Mandatory available!
+            client_type = fit_res.metrics["client-type"]
             embedding_results[client_type] = torch.from_numpy(parameters_to_ndarrays(fit_res.parameters)[0])
+            # Store original shapes to properly reshape gradients later
+            original_shapes[client_type] = embedding_results[client_type].shape
             
         if len(embedding_results) != 2:
             return None, {"error": "Need both text and image clients to participate"}
 
-        
+        # Get embeddings
         image_embeddings = embedding_results["image"]  
         text_embeddings = embedding_results["text"]   
         
-        
+        # Set requires grad for backward pass
         image_embeddings = image_embeddings.detach().requires_grad_()
         text_embeddings = text_embeddings.detach().requires_grad_()
         
-        
+        # Forward pass through server model
         logits_per_image, logits_per_text = self.server_model(image_embeddings, text_embeddings)
         
-        
+        # Compute loss
         batch_size = image_embeddings.size(0)
-        labels = torch.ones(batch_size).long().to(image_embeddings.device)
-       
+        labels = torch.arange(batch_size).long().to(image_embeddings.device)
         
         loss_img = F.cross_entropy(logits_per_image, labels)
         loss_txt = F.cross_entropy(logits_per_text, labels)
         loss = (loss_img + loss_txt) / 2.0
         
-        
+        # Backward pass
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
         
+        # Get gradients and process them through the inverse projection if needed
+        image_grads = image_embeddings.grad.detach()
+        text_grads = text_embeddings.grad.detach()
         
-        image_grads = image_embeddings.grad.detach().numpy()
-        text_grads = text_embeddings.grad.detach().numpy()
+        # Pack gradients and return
+        parameters_aggregated = ndarrays_to_parameters([
+            image_grads.numpy(), 
+            text_grads.numpy()
+        ])
         
-        
-        parameters_aggregated = ndarrays_to_parameters([image_grads, text_grads])
-        
-        
+        # Calculate metrics
         with torch.no_grad():
-            
             i2t_pred = logits_per_image.argmax(dim=1)
             i2t_acc = (i2t_pred == labels).float().mean().item() * 100
             
-            
             t2i_pred = logits_per_text.argmax(dim=1)
             t2i_acc = (t2i_pred == labels).float().mean().item() * 100
-            
             
             avg_acc = (i2t_acc + t2i_acc) / 2
         
@@ -163,4 +166,3 @@ class Strategy(fl.server.strategy.FedAvg):
         failures,
     ):
         return None, {}
-
