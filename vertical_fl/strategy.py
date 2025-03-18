@@ -3,29 +3,29 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
-
-
-class ServerModel(nn.Module):
-    def __init__(self, input_size):
-        super(ServerModel, self).__init__()
-        self.fc = nn.Linear(input_size, 1)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        x = self.fc(x)
-        return self.sigmoid(x)
+from vertical_fl.model import Qwen2ForCausalLMServer
+from transformers import AutoConfig
 
 
 class Strategy(fl.server.strategy.FedAvg):
     def __init__(self, labels, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.model = ServerModel(12)
+        self.config = AutoConfig.from_pretrained("Qwen/Qwen2.5-0.5B")
+        self.config.tie_word_embeddings = False
+        self.config.dtype = "bfloat16"
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.model_server = Qwen2ForCausalLMServer(self.config).to(self.device)
         self.initial_parameters = ndarrays_to_parameters(
-            [val.cpu().numpy() for _, val in self.model.state_dict().items()]
+            [val.cpu().numpy() for _, val in self.model_server.state_dict().items()]
         )
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
-        self.criterion = nn.BCELoss()
-        self.label = torch.tensor(labels).float().unsqueeze(1)
+        self.optimizer = optim.AdamW(
+            self.model_server.parameters(), 
+            lr=1e-4, 
+            betas=(0.9, 0.999)
+        )
+        self.loss_fn = nn.CrossEntropyLoss()
+        self.labels = labels # [B, S]
 
     def aggregate_fit(
         self,
@@ -42,29 +42,33 @@ class Strategy(fl.server.strategy.FedAvg):
             torch.from_numpy(parameters_to_ndarrays(fit_res.parameters)[0])
             for _, fit_res in results
         ]
-        embeddings_aggregated = torch.cat(embedding_results, dim=1)
+
+        # The parameters above doesn't necesarily means parameter, in this case
+        # I think it means the activation
+
+        # Concat on the hidden dimension
+        embeddings_aggregated = torch.cat(embedding_results, dim=-1)
+
+        # This should be already the hidden state
         embedding_server = embeddings_aggregated.detach().requires_grad_()
-        output = self.model(embedding_server)
-        loss = self.criterion(output, self.label)
+        outputs = self.model_server(input_embeds=embedding_server, labels=self.labels)
+        loss = outputs.loss
         loss.backward()
 
         self.optimizer.step()
         self.optimizer.zero_grad()
 
-        grads = embedding_server.grad.split([4, 4, 4], dim=1)
+        # Assuming we have 3 nodes, that means we split the model into 4 parts on the hidden dim
+        # (since that's the amount that we can do for splitting equally)
+        grads = embedding_server.grad.split([int(self.config.hidden_size // 4)] * 4, dim=-1)
         np_grads = [grad.numpy() for grad in grads]
         parameters_aggregated = ndarrays_to_parameters(np_grads)
 
         with torch.no_grad():
-            correct = 0
-            output = self.model(embedding_server)
-            predicted = (output > 0.5).float()
+            outputs = self.model_server(input_embeds=embedding_server, labels=self.labels)
+            loss = outputs.loss
 
-            correct += (predicted == self.label).sum().item()
-
-            accuracy = correct / len(self.label) * 100
-
-        metrics_aggregated = {"accuracy": accuracy}
+        metrics_aggregated = {"loss": loss}
 
         return parameters_aggregated, metrics_aggregated
 

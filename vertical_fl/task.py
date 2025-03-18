@@ -128,12 +128,3 @@ def _partition_data_vertically(df, all_keywords):
         )
 
     return partitions
-
-
-class ClientModel(nn.Module):
-    def __init__(self, input_size):
-        super().__init__()
-        self.fc = nn.Linear(input_size, 4)
-
-    def forward(self, x):
-        return self.fc(x)
