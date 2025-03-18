@@ -1,8 +1,7 @@
 from flwr.common import Context
 from flwr.server import ServerApp, ServerAppComponents, ServerConfig
 
-from vertical_fl.strategy import Strategy, CLIPFederatedStrategy
-from vertical_fl.task import process_dataset
+from vertical_fl.strategy import CLIPFederatedStrategy
 
 
 def server_fn(context: Context) -> ServerAppComponents:

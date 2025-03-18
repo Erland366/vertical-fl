@@ -1,11 +1,18 @@
 from flwr.client import ClientApp, NumPyClient
 from flwr.common import Context
-from sklearn.preprocessing import StandardScaler
 from transformers import CLIPProcessor
-import torch
-
-from vertical_fl.task import ClientModel, load_data
 from vertical_fl.model import CLIPTextClient, CLIPImageClient
+import torch
+import functools # NOT IDEAL WTF
+
+_CACHED_IMAGE_DATA = None
+_CACHED_TEXT_DATA = None
+
+@functools.lru_cache(maxsize=1)
+def get_fixed_data():
+    from vertical_fl.data_loader import load_fixed_data
+    return load_fixed_data()
+
 
 class TextFlowerClient(NumPyClient):
     def __init__(self, data, lr: float=1e-4):
@@ -73,47 +80,36 @@ class ImageFlowerClient(NumPyClient):
         return 0.0, len(self.data), {}
 
 
-class FlowerClient(NumPyClient):
-    def __init__(self, v_split_id, data, lr):
-        self.v_split_id = v_split_id
-        self.data = torch.tensor(StandardScaler().fit_transform(data)).float()
-        self.model = ClientModel(input_size=self.data.shape[1])
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=lr)
-
-    def get_parameters(self, config):
-        pass
-
-    def fit(self, parameters, config):
-        embedding = self.model(self.data)
-        return [embedding.detach().numpy()], 1, {}
-
-    def evaluate(self, parameters, config):
-        self.model.zero_grad()
-        embedding = self.model(self.data)
-        embedding.backward(torch.from_numpy(parameters[int(self.v_split_id)]))
-        self.optimizer.step()
-        return 0.0, 1, {}
-
-
 def client_fn(context: Context):
     """Create either an image or text client based on configuration."""
     partition_id = context.node_config.get("partition-id", 0)
     client_type = context.node_config.get("client-type", "image" if partition_id % 2 == 0 else "text")
+
+    use_fixed_data = context.run_config.get("use-fixed-data", False)
     
     lr = context.run_config.get("learning-rate", 1e-4)
 
-    if client_type == "image":
-        from vertical_fl.data_loader import load_image_data
-        image_data = load_image_data(partition_id)
-        return ImageFlowerClient(image_data, lr).to_client()
-    
-    elif client_type == "text":
-        from vertical_fl.data_loader import load_text_data
-        text_data = load_text_data(partition_id)
-        return TextFlowerClient(text_data, lr).to_client()
-    
+    if use_fixed_data:
+        global _CACHED_IMAGE_DATA, _CACHED_TEXT_DATA
+        
+        if _CACHED_IMAGE_DATA is None or _CACHED_TEXT_DATA is None:
+            _CACHED_IMAGE_DATA, _CACHED_TEXT_DATA = get_fixed_data()
+        if client_type == "image":
+            return ImageFlowerClient(_CACHED_IMAGE_DATA, lr).to_client()
+        elif client_type == "text":
+            return TextFlowerClient(_CACHED_TEXT_DATA, lr).to_client
     else:
-        raise ValueError(f"Unknown client type: {client_type}")
+        if client_type == "image":
+            from vertical_fl.data_loader import load_image_data
+            image_data = load_image_data(partition_id)
+            return ImageFlowerClient(image_data, lr).to_client()
+        
+        elif client_type == "text":
+            from vertical_fl.data_loader import load_text_data
+            text_data = load_text_data(partition_id)
+            return TextFlowerClient(text_data, lr).to_client()
+
+    raise ValueError(f"Unknown client type: {client_type}")
 
 
 app = ClientApp(

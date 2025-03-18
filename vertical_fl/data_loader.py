@@ -43,6 +43,24 @@ def load_text_data(client_id, batch_size=32):
         
     return captions
 
+def load_fixed_data(batch_size: int=4):
+    dataset = load_dataset("nlphuji/flickr30k", split="test")
+
+    fixed_indices = list(range(1, batch_size + 1))
+
+    images = []
+    captions = []
+
+    for idx in fixed_indices:
+        img = dataset[int(idx)]["image"]
+        images.append(img)
+
+        caption = dataset[int(idx)]["caption"][0]
+        captions.append(caption)
+
+    return images, captions
+
+
 def test_data_loaders():
     print("Testing image data loader...")
     images = load_image_data(0, batch_size=2)

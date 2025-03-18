@@ -29,6 +29,7 @@ clientapp = "vertical_fl.client_app:app"
 [tool.flwr.app.config]
 num-server-rounds = 3
 learning-rate = 0.1
+use_fixed_data = false
 
 [tool.flwr.federations]
 default = "local-simulation"
