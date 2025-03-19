@@ -2,6 +2,7 @@ from flwr.client import ClientApp, NumPyClient
 from flwr.common import Context
 from transformers import CLIPProcessor
 from vertical_fl.model import CLIPTextClient, CLIPImageClient
+from vertical_fl.data_loader import load_fixed_data, load_datasets
 import torch
 import functools # NOT IDEAL WTF
 
@@ -15,19 +16,21 @@ def get_fixed_data():
 
 
 class TextFlowerClient(NumPyClient):
-    def __init__(self, data, lr: float=1e-4):
+    def __init__(self, train_text_loader, lr: float=1e-4):
         super().__init__()
         self.properties = {"client_type" : "text"}
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.data = data
+        self.train_text_loader = train_text_loader
+        self.data = None # placeholder for evaluation
         self.model = CLIPTextClient().to(self.device)
-        self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
+        self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16", do_rescale=False)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
 
     def get_parameters(self, config):
         return [val.cpu().numpy() for _, val in self.model.state_dict().items()]
 
     def fit(self, parameters, config):
+        self.data = next(iter(self.train_text_loader))
         text_inputs = self.processor(text=self.data, return_tensors="pt", padding=True, truncation=True)
         text_inputs = {k: v.to(self.device) for k, v in text_inputs.items()}
         with torch.no_grad():
@@ -35,8 +38,8 @@ class TextFlowerClient(NumPyClient):
         return [text_embeddings.detach().numpy()], len(self.data), {"client-type": "text"}
 
     def evaluate(self, parameters, config):
+        assert self.data is not None, "Please call fit before evaluate"
         self.model.zero_grad()
-
         text_inputs = self.processor(text=self.data, return_tensors="pt", padding=True, truncation=True)
         text_inputs = {k: v.to(self.device) for k, v in text_inputs.items()}
         text_embeddings = self.model(**text_inputs)
@@ -48,25 +51,28 @@ class TextFlowerClient(NumPyClient):
         return 0.0, len(self.data), {}
 
 class ImageFlowerClient(NumPyClient):
-    def __init__(self, data, lr: float=1e-4):
+    def __init__(self, train_image_loader, lr: float=1e-4):
         super().__init__()
         self.properties = {"client_type" : "image"}
-        self.data = data
+        self.train_image_loader = train_image_loader
+        self.data = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = CLIPImageClient().to(self.device)
-        self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
+        self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16", do_rescale=False)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
 
     def get_parameters(self, config):
         return [val.cpu().numpy() for _, val in self.model.state_dict().items()]
 
     def fit(self, parameters, config):
+        self.data = next(iter(self.train_image_loader))
         image_inputs = self.processor(images=self.data, return_tensors="pt")
         with torch.no_grad():
             image_embeddings = self.model(**image_inputs)
         return [image_embeddings.detach().numpy()], len(self.data), {"client-type": "image"}
 
     def evaluate(self, parameters, config):
+        assert self.data is not None, "Please call fit before evaluate"
         self.model.zero_grad()
 
         image_inputs = self.processor(images=self.data, return_tensors="pt")
@@ -85,7 +91,7 @@ def client_fn(context: Context):
     partition_id = context.node_config.get("partition-id", 0)
     client_type = context.node_config.get("client-type", "image" if partition_id % 2 == 0 else "text")
 
-    use_fixed_data = context.run_config.get("use-fixed-data", False)
+    use_fixed_data = context.run_config.get("use-fixed-data", True)
     
     lr = context.run_config.get("learning-rate", 1e-4)
 
@@ -99,15 +105,11 @@ def client_fn(context: Context):
         elif client_type == "text":
             return TextFlowerClient(_CACHED_TEXT_DATA, lr).to_client
     else:
+        train_image_loader, train_text_loader = load_datasets(0, 32)
         if client_type == "image":
-            from vertical_fl.data_loader import load_image_data
-            image_data = load_image_data(partition_id)
-            return ImageFlowerClient(image_data, lr).to_client()
-        
+            return ImageFlowerClient(train_image_loader, lr).to_client()
         elif client_type == "text":
-            from vertical_fl.data_loader import load_text_data
-            text_data = load_text_data(partition_id)
-            return TextFlowerClient(text_data, lr).to_client()
+            return TextFlowerClient(train_text_loader, lr).to_client()
 
     raise ValueError(f"Unknown client type: {client_type}")
 

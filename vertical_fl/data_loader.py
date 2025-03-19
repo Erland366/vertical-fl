@@ -1,5 +1,40 @@
+import torch
+
 from datasets import load_dataset
+from torch.utils.data import DataLoader
+from flwr_datasets import FederatedDataset
+from torchvision import transforms
 import numpy as np
+
+def image_collate_fn(batch):
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),  # Resize all images to 224x224
+        transforms.ToTensor()
+    ])
+    images = [transform(item["image"]) for item in batch]
+    images = torch.stack(images)
+
+    return images
+
+def load_datasets(partition_id: int, batch_size: int):
+    fds = FederatedDataset(dataset="nlphuji/flickr30k", partitioners={"test" : 1})
+    partition = fds.load_partition(0)
+    partition_image = partition.remove_columns([x for x in partition.column_names if x != "image"])
+    partition_text = partition.remove_columns([x for x in partition.column_names if x != "caption"])
+    partition_text = partition_text.map(lambda x: {"text" : x["caption"][0]})
+    train_image = DataLoader(
+        partition_image, 
+        batch_size=batch_size, 
+        shuffle=False,
+        collate_fn=image_collate_fn
+    )
+    train_text = DataLoader(
+        partition_text["text"], 
+        batch_size=batch_size, 
+        shuffle=False
+    )
+
+    return train_image, train_text
 
 def load_image_data(client_id, batch_size=32):
     # For now let's just make it happen, I think this part will be loaded again and again per round
