@@ -19,7 +19,7 @@ _CACHED_TEXT_LOADER = None
 
 @functools.lru_cache(maxsize=1)
 def get_datasets():
-    train_image_loader, train_text_loader = load_datasets(0, 32)
+    train_image_loader, train_text_loader = load_datasets(0, 16)
     return train_image_loader, train_text_loader
 
 
@@ -41,7 +41,7 @@ class TextFlowerClient(NumPyClient):
         text_inputs = {k: v.to(self.device) for k, v in text_inputs.items()}
         with torch.no_grad():
             text_embeddings = self.model(**text_inputs)
-        return [text_embeddings.detach().numpy()], len(self.data), {"client-type": "text"}
+        return [text_embeddings.detach().cpu().numpy()], len(self.data), {"client-type": "text"}
 
     def evaluate(self, parameters, config):
         self.model.zero_grad()
@@ -70,9 +70,10 @@ class ImageFlowerClient(NumPyClient):
 
     def fit(self, parameters, config):
         image_inputs = self.processor(images=self.data, return_tensors="pt")
+        image_inputs = {k: v.to(self.device) for k, v in image_inputs.items()}
         with torch.no_grad():
             image_embeddings = self.model(**image_inputs)
-        return [image_embeddings.detach().numpy()], len(self.data), {"client-type": "image"}
+        return [image_embeddings.detach().cpu().numpy()], len(self.data), {"client-type": "image"}
 
     def evaluate(self, parameters, config):
         self.model.zero_grad()
@@ -110,7 +111,7 @@ def client_fn(context: Context):
         global _CACHED_IMAGE_LOADER, _CACHED_TEXT_LOADER
         
         if _CACHED_IMAGE_LOADER is None or _CACHED_TEXT_LOADER is None:
-            _CACHED_IMAGE_LOADER, _CACHED_TEXT_LOADER = get_fixed_data()
+            _CACHED_IMAGE_LOADER, _CACHED_TEXT_LOADER = get_datasets()
 
         train_image = next(iter(_CACHED_IMAGE_LOADER))
         train_text = next(iter(_CACHED_TEXT_LOADER))
