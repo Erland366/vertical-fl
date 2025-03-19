@@ -18,8 +18,8 @@ _CACHED_IMAGE_LOADER = None
 _CACHED_TEXT_LOADER = None
 
 @functools.lru_cache(maxsize=1)
-def get_datasets():
-    train_image_loader, train_text_loader = load_datasets(0, 16)
+def get_datasets(batch_size: int=16):
+    train_image_loader, train_text_loader = load_datasets(0, batch_size)
     return train_image_loader, train_text_loader
 
 
@@ -96,7 +96,8 @@ def client_fn(context: Context):
 
     use_fixed_data = context.run_config.get("use-fixed-data", True)
     
-    lr = context.run_config.get("learning-rate", 1e-4)
+    lr = context.run_config.get("train.learning-rate", 1e-4)
+    batch_size = context.run_config.get("train.batch-size", 16)
 
     if use_fixed_data:
         global _CACHED_IMAGE_DATA, _CACHED_TEXT_DATA
@@ -111,7 +112,7 @@ def client_fn(context: Context):
         global _CACHED_IMAGE_LOADER, _CACHED_TEXT_LOADER
         
         if _CACHED_IMAGE_LOADER is None or _CACHED_TEXT_LOADER is None:
-            _CACHED_IMAGE_LOADER, _CACHED_TEXT_LOADER = get_datasets()
+            _CACHED_IMAGE_LOADER, _CACHED_TEXT_LOADER = get_datasets(batch_size)
 
         train_image = next(iter(_CACHED_IMAGE_LOADER))
         train_text = next(iter(_CACHED_TEXT_LOADER))

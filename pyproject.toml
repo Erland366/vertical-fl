@@ -27,8 +27,9 @@ serverapp = "vertical_fl.server_app:app"
 clientapp = "vertical_fl.client_app:app"
 
 [tool.flwr.app.config]
-num-server-rounds = 5
-learning-rate = 0.1
+num-server-rounds = 100
+train.learning-rate = 0.1
+train.batch-size = 128 # Fit on RTX4090
 use-fixed-data = false
 
 [tool.flwr.federations]
