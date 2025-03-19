@@ -60,7 +60,6 @@ def load_text_data(client_id, batch_size=32):
     # TODO: Use FlowerDataset instead
     dataset = load_dataset("nlphuji/flickr30k", split="test")
     
-    
     dataset_size = len(dataset)
     indices = np.arange(dataset_size)
     np.random.seed(42 + client_id)  
