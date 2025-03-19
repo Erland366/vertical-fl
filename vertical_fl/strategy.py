@@ -1,18 +1,78 @@
+import json
 import flwr as fl
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
+import wandb
+from logging import INFO
+from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays, logger
 from torch.nn import functional as F
+from datetime import datetime
+from pathlib import Path
 
 from vertical_fl.model import CLIPServerModel
 
+PROJECT_NAME = "VFL-CLIP"
+
+def create_run_dir(config = None) -> Path:
+    """Create a directory where to save results from this run."""
+    # Create output directory given current timestamp
+    current_time = datetime.now()
+    run_dir = current_time.strftime("%Y-%m-%d/%H-%M-%S")
+    # Save path is based on the current directory
+    save_path = Path.cwd() / f"outputs/{run_dir}"
+    save_path.mkdir(parents=True, exist_ok=False)
+
+    # Save run config as json
+    if config is not None:
+        with open(f"{save_path}/run_config.json", "w", encoding="utf-8") as fp:
+            json.dump(config, fp)
+
+    return save_path, run_dir
+
 class CLIPFederatedStrategy(fl.server.strategy.FedAvg):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, lr: float, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.server_model = CLIPServerModel().to(self.device)
-        self.optimizer = torch.optim.AdamW(self.server_model.parameters(), lr=5e-5)
+        self.optimizer = torch.optim.AdamW(self.server_model.parameters(), lr=lr)
+
+        # TODO: Add config here later on
+        self.save_path, self.run_dir = create_run_dir()
+        self.results = {}
+
+        self._init_wandb_project()
+
+    def _init_wandb_project(self):
+        wandb.init(
+            project=PROJECT_NAME, 
+            name="CLIP-FedAvg", 
+            # config=self.config # TODO: Add config here later on
+        )
+
+    def _store_results(self, tag: str, results_dict):
+        """Store results in dictionary, then save as JSON."""
+        # Update results dict
+        if tag in self.results:
+            self.results[tag].append(results_dict)
+        else:
+            self.results[tag] = [results_dict]
+
+        # Save results to disk.
+        # Note we overwrite the same file with each call to this function.
+        # While this works, a more sophisticated approach is preferred
+        # in situations where the contents to be saved are larger.
+        with open(f"{self.save_path}/results.json", "w", encoding="utf-8") as fp:
+            json.dump(self.results, fp)
+
+    def store_results_and_log(self, server_round: int, tag: str, results_dict):
+        """A helper method that stores results and logs them to W&B if enabled."""
+        # Store results
+        self._store_results(
+            tag=tag,
+            results_dict={"round": server_round, **results_dict},
+        )
+
+            # Log centralized loss and metrics to W&B
+        wandb.log(results_dict, step=server_round)
 
     def aggregate_fit(self, rnd, results, failures):
         if not self.accept_failures and failures:
@@ -41,6 +101,20 @@ class CLIPFederatedStrategy(fl.server.strategy.FedAvg):
         loss_img = F.cross_entropy(logits_per_image, labels)
         loss_txt = F.cross_entropy(logits_per_text, labels)
         loss = (loss_img + loss_txt) / 2.0
+        logger.log(INFO, f"Round {rnd} loss: {loss.item()}")
+
+        results_dict = {
+            "loss": loss.item(),
+            "loss_img": loss_img.item(),
+            "loss_txt": loss_txt.item(),
+        }
+
+        self.store_results_and_log(
+            server_round=rnd,
+            tag="aggregate_fit",
+            results_dict=results_dict,
+        )
+        wandb.log(results_dict, step=rnd)
         
         self.optimizer.zero_grad()
         loss.backward()
