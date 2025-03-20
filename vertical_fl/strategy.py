@@ -96,25 +96,13 @@ class CLIPFederatedStrategy(fl.server.strategy.FedAvg):
         logits_per_image, logits_per_text = self.server_model(image_embeddings, text_embeddings)
         
         batch_size = image_embeddings.size(0)
-        labels = torch.arange(batch_size).long().to(self.device)
+        labels = torch.arange(batch_size, device=self.device).long()
         
-        loss_img = F.cross_entropy(logits_per_image, labels)
+        loss_img = F.cross_entropy(logits_per_text.t(), labels)
         loss_txt = F.cross_entropy(logits_per_text, labels)
         loss = (loss_img + loss_txt) / 2.0
         logger.log(INFO, f"Round {rnd} loss: {loss.item()}")
 
-        results_dict = {
-            "loss": loss.item(),
-            "loss_img": loss_img.item(),
-            "loss_txt": loss_txt.item(),
-        }
-
-        self.store_results_and_log(
-            server_round=rnd,
-            tag="aggregate_fit",
-            results_dict=results_dict,
-        )
-        wandb.log(results_dict, step=rnd)
         
         self.optimizer.zero_grad()
         loss.backward()
@@ -139,17 +127,21 @@ class CLIPFederatedStrategy(fl.server.strategy.FedAvg):
         
         metrics_aggregated = {
             "loss": loss.item(),
+            "loss_img": loss_img.item(),
+            "loss_txt": loss_txt.item(),
             "i2t_acc": i2t_acc,
             "t2i_acc": t2i_acc,
             "avg_acc": avg_acc,
         }
+
+        self.store_results_and_log(
+            server_round=rnd,
+            tag="aggregate_fit",
+            results_dict=metrics_aggregated,
+        )
+        wandb.log(metrics_aggregated, step=rnd)
         
         return parameters_aggregated, metrics_aggregated
-
-    def aggregate_evaluate(self, rnd, results, failures):
-        # For CLIP, evaluation happens during training via contrastive loss
-        # But we could implement a separate evaluation if needed
-        return None, {}
 
     def get_fit_config_fn(self, server_round):
         """Return a function which returns the fit configuration."""

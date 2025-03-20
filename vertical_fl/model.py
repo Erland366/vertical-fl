@@ -59,6 +59,7 @@ CLIPModel(
 """
 from transformers import CLIPModel
 
+import torch
 from torch import nn
 
 class CLIPTextClient(nn.Module):
@@ -87,6 +88,7 @@ class CLIPServerModel(nn.Module):
         clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
         self.visual_projection = clip_model.visual_projection
         self.text_projection = clip_model.text_projection
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.logit_scale = clip_model.logit_scale
             
@@ -94,11 +96,13 @@ class CLIPServerModel(nn.Module):
         image_embeddings = self.visual_projection(image_embeddings) # [B, 512]
         text_embeddings = self.text_projection(text_embeddings) # [B, 512]
 
-        image_embeddings = image_embeddings / image_embeddings.norm(dim=-1, keepdim=True)
-        text_embeddings = text_embeddings / text_embeddings.norm(dim=-1, keepdim=True)
+        image_embeddings = image_embeddings / image_embeddings.norm(p=2, dim=-1, keepdim=True)
+        text_embeddings = text_embeddings / text_embeddings.norm(p=2, dim=-1, keepdim=True)
 
         logit_scale = self.logit_scale.exp()
-        logits_per_image = logit_scale * image_embeddings @ text_embeddings.t()
-        logits_per_text = logits_per_image.t()
+        logits_per_text = torch.matmul(text_embeddings, image_embeddings.t().to(text_embeddings.device)) * logit_scale.to(
+            text_embeddings.device
+        )
+        logits_per_image = logits_per_text.t()
 
         return logits_per_image, logits_per_text
