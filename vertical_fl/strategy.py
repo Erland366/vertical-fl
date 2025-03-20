@@ -9,8 +9,21 @@ from datetime import datetime
 from pathlib import Path
 
 from vertical_fl.model import CLIPServerModel
+from dataclasses import dataclass
 
-PROJECT_NAME = "VFL-CLIP"
+@dataclass
+class ConfigServer:
+    lr: float
+    num_rounds: int
+    batch_size: int
+
+    use_fixed_data: bool
+
+    aggregate_strategy: str
+
+    num_partitions: int | None = None
+    project_name: str = "VFL-CLIP"
+    run_name: str = "CLIP-FedAvg"
 
 def create_run_dir(config = None) -> Path:
     """Create a directory where to save results from this run."""
@@ -29,11 +42,12 @@ def create_run_dir(config = None) -> Path:
     return save_path, run_dir
 
 class CLIPFederatedStrategy(fl.server.strategy.FedAvg):
-    def __init__(self, lr: float, *args, **kwargs) -> None:
+    def __init__(self, config: ConfigServer, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.server_model = CLIPServerModel().to(self.device)
-        self.optimizer = torch.optim.AdamW(self.server_model.parameters(), lr=lr)
+        self.config = config
+        self.optimizer = torch.optim.AdamW(self.server_model.parameters(), lr=config.lr)
 
         # TODO: Add config here later on
         self.save_path, self.run_dir = create_run_dir()
@@ -42,10 +56,16 @@ class CLIPFederatedStrategy(fl.server.strategy.FedAvg):
         self._init_wandb_project()
 
     def _init_wandb_project(self):
+        run_name = (
+            self.config.run_name +
+            f"_{self.config.aggregate_strategy}" + 
+            f"_p{self.config.num_partitions}" + 
+            f"_r{self.config.num_rounds}"
+        )
         wandb.init(
-            project=PROJECT_NAME, 
-            name="CLIP-FedAvg", 
-            # config=self.config # TODO: Add config here later on
+            project=self.config.project_name, 
+            name=run_name, 
+            config=self.config
         )
 
     def _store_results(self, tag: str, results_dict):
@@ -75,6 +95,9 @@ class CLIPFederatedStrategy(fl.server.strategy.FedAvg):
         wandb.log(results_dict, step=server_round)
 
     def aggregate_fit(self, rnd, results, failures):
+        self.config.num_partitions = len(results)
+        assert self.config.num_partitions % 2 == 0, "Num of client must be even!"
+
         if not self.accept_failures and failures:
             return None, {}
             
@@ -82,13 +105,20 @@ class CLIPFederatedStrategy(fl.server.strategy.FedAvg):
         
         for _, fit_res in results:
             client_type = fit_res.metrics["client-type"]
-            embedding_results[client_type] = torch.from_numpy(parameters_to_ndarrays(fit_res.parameters)[0]).to(self.device)
+            if self.config.aggregate_strategy == "reduce":
+                # sum then average the client
+                if client_type in embedding_results:
+                    embedding_results[client_type]["embedding"] += torch.from_numpy(parameters_to_ndarrays(fit_res.parameters)[0]).to(self.device)
+                    embedding_results[client_type]["count"] += 1
+                else:
+                    embedding_results[client_type]["embedding"] = torch.from_numpy(parameters_to_ndarrays(fit_res.parameters)[0]).to(self.device)
+                    embedding_results[client_type]["count"] = 1
             
-        if len(embedding_results) != 2:
-            return None, {"error": "Need both text and image clients to participate"}
+            if len(embedding_results) != 2:
+                return None, {"error": "Need both text and image clients to participate"}
 
-        image_embeddings = embedding_results["image"]  
-        text_embeddings = embedding_results["text"]   
+            image_embeddings = embedding_results["image"]["embedding"] / embedding_results["image"]["count"]
+            text_embeddings = embedding_results["text"]["embedding"] / embedding_results["image"]["count"]
         
         image_embeddings = image_embeddings.detach().requires_grad_()
         text_embeddings = text_embeddings.detach().requires_grad_()
@@ -110,11 +140,16 @@ class CLIPFederatedStrategy(fl.server.strategy.FedAvg):
         
         image_grads = image_embeddings.grad.detach().cpu()
         text_grads = text_embeddings.grad.detach().cpu()
-        
-        parameters_aggregated = ndarrays_to_parameters([
-            image_grads.numpy(), 
-            text_grads.numpy()
-        ])
+
+        if self.config.aggregate_strategy == "reduce":
+            parameters_aggregated = [None] * self.config.num_partitions
+            for i in range(len(parameters_aggregated)):
+                if i % 2 == 0:
+                    parameters_aggregated[i] = image_grads.numpy()
+                else:
+                    parameters_aggregated[i] = text_grads.numpy()
+            
+            parameters_aggregated = ndarrays_to_parameters(parameters_aggregated)
         
         with torch.no_grad():
             i2t_pred = logits_per_image.argmax(dim=1)

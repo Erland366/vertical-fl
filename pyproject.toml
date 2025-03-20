@@ -31,11 +31,15 @@ num-server-rounds = 100
 train.learning-rate = 5e-5
 train.batch-size = 128 # Fit on RTX4090
 use-fixed-data = false
+aggregate-strategy = "reduce"
+
+log.project_name = "VFL-CLIP"
+log.run_name = "CLIP-FedAvg"
 
 [tool.flwr.federations]
 default = "local-simulation"
 
 [tool.flwr.federations.local-simulation]
-options.num-supernodes = 2 # Note that this example will require changes to how VFL is implemented
+options.num-supernodes = 4 # Note that this example will require changes to how VFL is implemented
 options.backend.client-resources.num-gpus = 1.0
 options.backend.client-resources.num-cpus = 4
