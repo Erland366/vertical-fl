@@ -25,7 +25,7 @@ def server_fn(context: Context) -> ServerAppComponents:
         accept_failures=False
     )
 
-    config = ServerConfig(num_rounds=config.run_name)
+    config = ServerConfig(num_rounds=config.num_rounds)
 
     return ServerAppComponents(strategy=strategy, config=config)
 

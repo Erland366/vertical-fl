@@ -101,19 +101,28 @@ class CLIPFederatedStrategy(fl.server.strategy.FedAvg):
         if not self.accept_failures and failures:
             return None, {}
             
-        embedding_results = {}
-        
+        embedding_results = {
+            "image": {}, 
+            "text": {}
+        }
+
         for _, fit_res in results:
             client_type = fit_res.metrics["client-type"]
             if self.config.aggregate_strategy == "reduce":
-                # sum then average the client
+                # Initialize the nested dictionary if this is the first time seeing this client type
                 if client_type in embedding_results:
-                    embedding_results[client_type]["embedding"] += torch.from_numpy(parameters_to_ndarrays(fit_res.parameters)[0]).to(self.device)
-                    embedding_results[client_type]["count"] += 1
+                    if "embedding" not in embedding_results[client_type]:
+                        embedding_results[client_type]["embedding"] = torch.from_numpy(parameters_to_ndarrays(fit_res.parameters)[0]).to(self.device)
+                        embedding_results[client_type]["count"] = 1
+                    else:
+                        embedding_results[client_type]["embedding"] += torch.from_numpy(parameters_to_ndarrays(fit_res.parameters)[0]).to(self.device)
+                        embedding_results[client_type]["count"] += 1
                 else:
-                    embedding_results[client_type]["embedding"] = torch.from_numpy(parameters_to_ndarrays(fit_res.parameters)[0]).to(self.device)
-                    embedding_results[client_type]["count"] = 1
-            
+                    # This block might not be needed since you initialize both "image" and "text"
+                    embedding_results[client_type] = {
+                        "embedding": torch.from_numpy(parameters_to_ndarrays(fit_res.parameters)[0]).to(self.device),
+                        "count": 1
+                    }
             if len(embedding_results) != 2:
                 return None, {"error": "Need both text and image clients to participate"}
 
