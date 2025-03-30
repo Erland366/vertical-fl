@@ -126,8 +126,8 @@ class CLIPFederatedStrategy(fl.server.strategy.FedAvg):
             if len(embedding_results) != 2:
                 return None, {"error": "Need both text and image clients to participate"}
 
-            image_embeddings = embedding_results["image"]["embedding"] / embedding_results["image"]["count"]
-            text_embeddings = embedding_results["text"]["embedding"] / embedding_results["image"]["count"]
+        image_embeddings = embedding_results["image"]["embedding"] / embedding_results["image"]["count"]
+        text_embeddings = embedding_results["text"]["embedding"] / embedding_results["image"]["count"]
         
         image_embeddings = image_embeddings.detach().requires_grad_()
         text_embeddings = text_embeddings.detach().requires_grad_()

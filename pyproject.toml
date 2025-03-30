@@ -40,6 +40,6 @@ log.run_name = "CLIP-FedAvg"
 default = "local-simulation"
 
 [tool.flwr.federations.local-simulation]
-options.num-supernodes = 4 # Note that this example will require changes to how VFL is implemented
+options.num-supernodes = 6 # Note that this example will require changes to how VFL is implemented
 options.backend.client-resources.num-gpus = 1.0
 options.backend.client-resources.num-cpus = 4
