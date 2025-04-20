@@ -38,7 +38,7 @@ log.run_name = "Attack-SideData{size}" # Use run name template for Wandb
 
 # Attack Configuration
 attack.model_path = "attack_models/attack_model_sidesize_10.pth" # Placeholder, replace {size} or manage dynamically
-attack.side_data_size = 100 # Placeholder, configure this for experiments
+attack.side_data_size = 10 # Placeholder, configure this for experiments
 
 [tool.flwr.federations]
 default = "local-simulation"

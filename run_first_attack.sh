@@ -1,0 +1,5 @@
+WANDB_MODE="online" flwr run . --run-config 'attack.model_path="attack_models/attack_model_sidesize_10.pth" attack.side_data_size=10'
+WANDB_MODE="online" flwr run . --run-config 'attack.model_path="attack_models/attack_model_sidesize_100.pth" attack.side_data_size=100'
+WANDB_MODE="online" flwr run . --run-config 'attack.model_path="attack_models/attack_model_sidesize_250.pth" attack.side_data_size=250'
+WANDB_MODE="online" flwr run . --run-config 'attack.model_path="attack_models/attack_model_sidesize_500.pth" attack.side_data_size=500'
+WANDB_MODE="online" flwr run . --run-config 'attack.model_path="attack_models/attack_model_sidesize_1000.pth" attack.side_data_size=1000'

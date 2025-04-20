@@ -159,6 +159,7 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
 
         self.optimizer.zero_grad()
         vfl_loss.backward()
+        self.optimizer.step()
 
         avg_image_grads = avg_image_embeddings.grad.detach()
         avg_text_grads = avg_text_embeddings.grad.detach()
