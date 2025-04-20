@@ -77,23 +77,24 @@ class CLIPImageClient(nn.Module):
         super().__init__()
         clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
         self.vision_model = clip_model.vision_model
+        self.visual_projection = clip_model.visual_projection
 
     def forward(self, pixel_values):
         vision_outputs = self.vision_model(pixel_values, output_hidden_states=True)
-        return vision_outputs.pooler_output
+        pooler_output = vision_outputs.pooler_output
+        projected_embedding = self.visual_projection(pooler_output)
+        return projected_embedding 
 
 class CLIPServerModel(nn.Module):
     def __init__(self):
         super().__init__()
         clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
-        self.visual_projection = clip_model.visual_projection
         self.text_projection = clip_model.text_projection
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.logit_scale = clip_model.logit_scale
             
     def forward(self, image_embeddings, text_embeddings):
-        image_embeddings = self.visual_projection(image_embeddings) # [B, 512]
         text_embeddings = self.text_projection(text_embeddings) # [B, 512]
 
         image_embeddings = image_embeddings / image_embeddings.norm(p=2, dim=-1, keepdim=True)

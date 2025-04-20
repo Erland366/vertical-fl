@@ -165,18 +165,17 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
         avg_text_grads = avg_text_embeddings.grad.detach()
 
         attack_metrics = {}
-        if self.config.log_attack_metrics and num_text_clients > 0 and num_image_clients > 0:
-            predicted_embs_list = [pred_emb for _, _, pred_emb in text_client_results if pred_emb is not None]
-            if predicted_embs_list:
-                sum_predicted_image_embeddings = sum(predicted_embs_list)
-                avg_predicted_image_embeddings = torch.from_numpy(sum_predicted_image_embeddings / len(predicted_embs_list)).to(self.device)
+        predicted_embs_list = [pred_emb for _, _, pred_emb in text_client_results if pred_emb is not None]
+        if predicted_embs_list:
+            sum_predicted_image_embeddings = sum(predicted_embs_list)
+            avg_predicted_image_embeddings = torch.from_numpy(sum_predicted_image_embeddings / len(predicted_embs_list)).to(self.device)
 
-                if avg_predicted_image_embeddings.shape == avg_image_embeddings.shape:
-                    cosine_sim = F.cosine_similarity(avg_predicted_image_embeddings, avg_image_embeddings, dim=1).mean().item()
-                    attack_metrics["attack_cosine_similarity"] = cosine_sim
-                    logger.log(INFO, f"Round {rnd} Attack Cosine Similarity: {cosine_sim:.4f}")
-                else:
-                     logger.log(WARN, f"Round {rnd}: Shape mismatch for attack evaluation: Predicted {avg_predicted_image_embeddings.shape}, Actual {avg_image_embeddings.shape}. Skipping attack metric.")
+            if avg_predicted_image_embeddings.shape == avg_image_embeddings.shape:
+                cosine_sim = F.cosine_similarity(avg_predicted_image_embeddings, avg_image_embeddings, dim=1).mean().item()
+                attack_metrics["attack_cosine_similarity"] = cosine_sim
+                logger.log(INFO, f"Round {rnd} Attack Cosine Similarity: {cosine_sim:.4f}")
+            else:
+                logger.log(WARN, f"Round {rnd}: Shape mismatch for attack evaluation: Predicted {avg_predicted_image_embeddings.shape}, Actual {avg_image_embeddings.shape}. Skipping attack metric.")
 
         parameters_aggregated = [None] * self.config.num_partitions
         for i in range(len(parameters_aggregated)):
@@ -186,15 +185,24 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
                 parameters_aggregated[i] = avg_text_grads.cpu().numpy()
         
         parameters_aggregated = ndarrays_to_parameters(parameters_aggregated)
-        
+
+        with torch.no_grad():
+            i2t_pred = logits_per_image.argmax(dim=1)
+            i2t_acc = (i2t_pred == labels).float().mean().item() * 100
+            
+            t2i_pred = logits_per_text.argmax(dim=1)
+            t2i_acc = (t2i_pred == labels).float().mean().item() * 100
+            
+            avg_acc = (i2t_acc + t2i_acc) / 2
+
         metrics_aggregated = {
-            "vfl_loss": vfl_loss.item(),
-            "vfl_loss_img": loss_img.item(),
-            "vfl_loss_txt": loss_txt.item(),
-            "i2t_acc": logits_per_image.argmax(dim=1).eq(labels).float().mean().item() * 100,
-            "t2i_acc": logits_per_text.argmax(dim=1).eq(labels).float().mean().item() * 100,
-            "avg_acc": (logits_per_image.argmax(dim=1).eq(labels).float().mean().item() + logits_per_text.argmax(dim=1).eq(labels).float().mean().item()) * 50,
-            **attack_metrics
+            "loss": vfl_loss.item(),
+            "loss_img": loss_img.item(),
+            "loss_txt": loss_txt.item(),
+            "i2t_acc": i2t_acc,
+            "t2i_acc": t2i_acc,
+            "avg_acc": avg_acc,
+            **attack_metrics,
         }
 
         self.store_results_and_log(

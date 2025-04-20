@@ -3,7 +3,7 @@ from flwr.common import Context, logger
 from transformers import CLIPProcessor
 from vertical_fl.model import CLIPTextClient, CLIPImageClient
 from vertical_fl.data_loader import load_fixed_data, load_datasets
-from vertical_fl.attack_model import AttackNet
+from vertical_fl.attack_model import AttackFromTextNet
 from logging import INFO
 from dataclasses import dataclass
 import os
@@ -51,7 +51,7 @@ class TextFlowerClientAttacker(NumPyClient):
 
         self.attack_model = None
         if self.config.attack_model_path and os.path.exists(self.config.attack_model_path):
-            self.attack_model = AttackNet().to(self.device)
+            self.attack_model = AttackFromTextNet().to(self.device)
             self.attack_model.load_state_dict(torch.load(self.config.attack_model_path, map_location=self.device))
             self.attack_model.eval() # Attack model should be in eval mode during FL
             logger.log(INFO, f"Text client {partition_id} loaded attack model from {self.config.attack_model_path}")
@@ -86,7 +86,7 @@ class TextFlowerClientAttacker(NumPyClient):
 
     def evaluate(self, parameters, config):
         self.model_text.train()
-        self.model_text.zero_grad()
+        self.optimizer.zero_grad()
         text_inputs = self.processor(text=self.data, return_tensors="pt", padding=True, truncation=True)
         text_inputs = {k: v.to(self.device) for k, v in text_inputs.items()}
         text_embeddings = self.model_text(**text_inputs)
@@ -120,18 +120,58 @@ class ImageFlowerClient(NumPyClient):
         return [image_embeddings.detach().cpu().numpy()], len(self.data), {"client-type": "image"}
 
     def evaluate(self, parameters, config):
+        # Ensure model is on the correct device and in training mode
+        self.model_image.to(self.device)
         self.model_image.train()
-        self.model_image.zero_grad()
+        self.optimizer.zero_grad() # Zero gradients before forward/backward
+
+        # --- DEBUGGING: Log parameters before update ---
+        params_before = [p.detach().clone() for p in self.model_image.parameters() if p.requires_grad]
 
         image_inputs = self.processor(images=self.data, return_tensors="pt")
+        # Ensure inputs are on the correct device
         image_inputs = {k: v.to(self.device) for k, v in image_inputs.items()}
+        # --- Perform forward pass to get tensor for backward() ---
+        # Make sure requires_grad=True for the output if model is in train mode (should be default)
         image_embeddings = self.model_image(**image_inputs)
 
-        grad_tensor = torch.from_numpy(parameters[self.partition_id]).to(self.device)
-        image_embeddings.backward(grad_tensor)
+        # --- DEBUGGING: Check received gradient ---
+        try:
+            grad_tensor_np = parameters[self.partition_id]
+            grad_tensor = torch.from_numpy(grad_tensor_np).to(self.device)
+            grad_norm = torch.linalg.norm(grad_tensor).item()
+            logger.log(INFO, f"Client {self.partition_id} (Image): Received grad norm = {grad_norm:.4f}")
+            if grad_norm == 0:
+                 logger.log(INFO, f"Client {self.partition_id} (Image): WARNING - Received zero gradient!")
 
-        self.optimizer.step()
+            # --- Apply gradient ---
+            image_embeddings.backward(grad_tensor)
 
+            # --- DEBUGGING: Check model gradients after backward() ---
+            model_grad_norm = sum(torch.linalg.norm(p.grad).item()**2 for p in self.model_image.parameters() if p.grad is not None)**0.5
+            logger.log(INFO, f"Client {self.partition_id} (Image): Model grad norm after backward = {model_grad_norm:.4f}")
+            if model_grad_norm == 0:
+                 logger.log(INFO, f"Client {self.partition_id} (Image): WARNING - Model gradients are zero after backward!")
+
+
+            # --- Perform optimizer step ---
+            self.optimizer.step()
+
+            # --- DEBUGGING: Check parameter change after optimizer step ---
+            params_after = [p.detach() for p in self.model_image.parameters() if p.requires_grad]
+            param_change_norm = sum(torch.linalg.norm(p_after - p_before).item()**2 for p_before, p_after in zip(params_before, params_after))**0.5
+            logger.log(INFO, f"Client {self.partition_id} (Image): Param change norm after step = {param_change_norm:.4f}")
+            if param_change_norm == 0:
+                 logger.log(INFO, f"Client {self.partition_id} (Image): WARNING - Parameters did not change after optimizer step!")
+
+
+        except IndexError:
+             logger.log(INFO, f"Client {self.partition_id} (Image): ERROR - IndexError accessing gradient parameters[{self.partition_id}]")
+        except Exception as e:
+             logger.log(INFO, f"Client {self.partition_id} (Image): ERROR - Exception during evaluate: {e}")
+
+
+        # Return dummy values as required by Flower
         return 0.0, len(self.data), {}
 
 

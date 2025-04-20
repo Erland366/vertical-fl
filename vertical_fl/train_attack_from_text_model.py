@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from transformers import CLIPProcessor, CLIPModel
-from vertical_fl.attack_model import AttackNet
+from vertical_fl.attack_model import AttackFromTextNet
 from datasets import load_dataset
 from torchvision import transforms
 from PIL import Image
@@ -53,7 +53,7 @@ def main(side_data_size=None):
 
     dataloader = DataLoader(side_dataset, batch_size=BATCH_SIZE, shuffle=True)
 
-    attack_net = AttackNet().to(DEVICE)
+    attack_net = AttackFromTextNet().to(DEVICE)
     optimizer = torch.optim.AdamW(attack_net.parameters(), lr=LEARNING_RATE)
     criterion = nn.MSELoss() # Or nn.CosineSimilarity loss, inverted
 
@@ -74,7 +74,7 @@ def main(side_data_size=None):
         print(f"Epoch {epoch+1}/{EPOCHS}, Loss: {total_loss / len(dataloader):.4f}")
 
     os.makedirs("attack_models", exist_ok=True)
-    model_save_path = os.path.join("attack_models", f"attack_model_sidesize_{side_data_size}.pth")
+    model_save_path = os.path.join("attack_models_from_text", f"attack_model_sidesize_{side_data_size}.pth")
     torch.save(attack_net.state_dict(), model_save_path)
     print(f"Attack model saved to {model_save_path}")
 

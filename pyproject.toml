@@ -28,9 +28,9 @@ clientapp = "vertical_fl.client_app_attack:app"
 
 [tool.flwr.app.config]
 num-server-rounds = 100
-train.learning-rate = 5e-5
+train.learning-rate = 5e-3
 train.batch-size = 128 # Fit on RTX4090
-use-fixed-data = true # IMPORTANT: Use fixed data for paired batches
+use-fixed-data = false # IMPORTANT: Use fixed data for paired batches
 aggregate-strategy = "reduce" # Or "gather", depends on the original code path, check strategy.py
 
 log.project_name = "VFL-CLIP-Attack" # New project name for attack experiments
