@@ -62,8 +62,6 @@ class TextFlowerClientAttacker(NumPyClient):
         return [val.cpu().numpy() for _, val in self.model_text.state_dict().items()]
 
     def fit(self, parameters, config):
-        self.model_text.train()
-
         text_inputs = self.processor(text=self.data, return_tensors="pt", padding=True, truncation=True)
         text_inputs = {k: v.to(self.device) for k, v in text_inputs.items()}
 
@@ -76,9 +74,6 @@ class TextFlowerClientAttacker(NumPyClient):
                  predicted_image_embeddings = self.attack_model(text_embeddings)
              logger.log(INFO, f"Text client {self.partition_id} predicted image embeddings.")
 
-        # The server expects a list of numpy arrays as parameters
-        # We send the text embeddings and the predicted image embeddings (if attack is enabled)
-        # THIS IS ONLY FOR EVALUATION
         params_to_send = [text_embeddings.detach().cpu().numpy()]
         if predicted_image_embeddings is not None:
             params_to_send.append(predicted_image_embeddings.detach().cpu().numpy())
@@ -92,28 +87,13 @@ class TextFlowerClientAttacker(NumPyClient):
     def evaluate(self, parameters, config):
         self.model_text.train()
         self.model_text.zero_grad()
-        with torch.enable_grad():
-            text_inputs = self.processor(text=self.data, return_tensors="pt", padding=True, truncation=True)
-            text_inputs = {k: v.to(self.device) for k, v in text_inputs.items()}
-            text_embeddings = self.model_text(**text_inputs)
+        text_inputs = self.processor(text=self.data, return_tensors="pt", padding=True, truncation=True)
+        text_inputs = {k: v.to(self.device) for k, v in text_inputs.items()}
+        text_embeddings = self.model_text(**text_inputs)
 
-        if len(parameters) <= self.partition_id:
-             logger.log(WARN, f"Client {self.partition_id}: Expected gradient at index {self.partition_id} but parameters list has length {len(parameters)}. Skipping update.")
-             return 0.0, len(self.data), {}
-
-        grad_tensor_correct_idx = torch.from_numpy(parameters[self.partition_id]).to(self.device)
-
-        if text_embeddings.requires_grad:
-             text_embeddings.backward(grad_tensor_correct_idx)
-             for name, param in self.model_text.named_parameters():
-                 if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
-                     logger.log(WARN, f"Client {self.partition_id}: NaN/Inf gradient detected in {name}. Skipping optimizer step.")
-                     return 0.0, len(self.data), {} 
-
-
-             self.optimizer.step()
-        else:
-             logger.log(WARN, f"Client {self.partition_id}: Text embeddings do not require grad. Cannot apply received gradient. Skipping update.")
+        grad_tensor = torch.from_numpy(parameters[self.partition_id]).to(self.device)
+        text_embeddings.backward(grad_tensor)
+        self.optimizer.step()
 
         return 0.0, len(self.data), {}
 
@@ -185,7 +165,7 @@ def client_fn(context: Context):
         if client_type == "image":
             return ImageFlowerClient(_CACHED_IMAGE_DATA, partition_id, config).to_client()
         elif client_type == "text":
-            return TextFlowerClientAttacker(_CACHED_TEXT_DATA, partition_id, config).to_client
+            return TextFlowerClientAttacker(_CACHED_TEXT_DATA, partition_id, config).to_client()
     else:
         global _CACHED_IMAGE_LOADER, _CACHED_TEXT_LOADER
         

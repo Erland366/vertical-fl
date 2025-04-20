@@ -115,7 +115,7 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
                 image_client_results.append((client.cid, image_embeddings_batch))
             elif client_type == "text":
                 params = parameters_to_ndarrays(fit_res.parameters)
-                if len(params) >= 2: # Check if predicted embeddings are included
+                if len(params) >= 2:
                      text_embeddings_batch = params[0]
                      predicted_image_embeddings_batch = params[1]
                      text_client_results.append((client.cid, text_embeddings_batch, predicted_image_embeddings_batch))
@@ -131,18 +131,12 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
             logger.log(WARN, f"Round {rnd}: Missing image or text client results. Cannot perform VFL or attack evaluation.")
             return None, {"error": "Missing image or text client results"}
 
-        # --- Aggregate Embeddings for VFL Training ---
-        # Sum embeddings from clients of the same type as done in original code
         sum_image_embeddings = sum([emb for _, emb in image_client_results])
         sum_text_embeddings = sum([emb for _, emb, _ in text_client_results if _ is not None]) # Sum only from clients that sent text embeddings
 
-        # Average aggregated embeddings
-        # Note: This averaging before projection is the behaviour of the original code.
-        # Standard VFL would typically concatenate features/embeddings.
         num_image_clients = len(image_client_results)
         num_text_clients = len(text_client_results)
         
-        # Check if dimensions match before converting to tensor
         if num_image_clients > 0 and num_text_clients > 0:
              avg_image_embeddings = torch.from_numpy(sum_image_embeddings / num_image_clients).to(self.device)
              avg_text_embeddings = torch.from_numpy(sum_text_embeddings / num_text_clients).to(self.device)
@@ -150,42 +144,32 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
              logger.log(WARN, f"Round {rnd}: Not enough image or text clients. Skipping VFL step.")
              return None, {"error": "Not enough image or text clients"}
 
-        # Ensure embeddings require grad for backprop
         avg_image_embeddings.requires_grad_(True)
         avg_text_embeddings.requires_grad_(True)
 
-        # --- Server Model Forward Pass and Loss ---
         logits_per_image, logits_per_text = self.server_model(avg_image_embeddings, avg_text_embeddings)
 
-        batch_size = avg_image_embeddings.size(0) # Batch size is determined by client batch size
-        labels = torch.arange(batch_size, device=self.device).long() # Assuming instances are paired within the batch
+        batch_size = avg_image_embeddings.size(0)
+        labels = torch.arange(batch_size, device=self.device).long()
 
         loss_img = F.cross_entropy(logits_per_text.t(), labels)
         loss_txt = F.cross_entropy(logits_per_text, labels)
         vfl_loss = (loss_img + loss_txt) / 2.0
         logger.log(INFO, f"Round {rnd} VFL loss: {vfl_loss.item()}")
 
-        # --- Server Model Backward Pass (to get embedding gradients) ---
-        self.optimizer.zero_grad() # Zero gradients for server model parameters
+        self.optimizer.zero_grad()
         vfl_loss.backward()
 
-        # These are gradients w.r.t the *averaged* embeddings
         avg_image_grads = avg_image_embeddings.grad.detach()
         avg_text_grads = avg_text_embeddings.grad.detach()
 
-        # --- Attack Evaluation ---
         attack_metrics = {}
         if self.config.log_attack_metrics and num_text_clients > 0 and num_image_clients > 0:
-            # Aggregate predicted image embeddings
-            # Only average predictions from clients that actually sent them
             predicted_embs_list = [pred_emb for _, _, pred_emb in text_client_results if pred_emb is not None]
             if predicted_embs_list:
                 sum_predicted_image_embeddings = sum(predicted_embs_list)
-                # Note: Averaging by num_text_clients, assuming each text client predicts for its batch
                 avg_predicted_image_embeddings = torch.from_numpy(sum_predicted_image_embeddings / len(predicted_embs_list)).to(self.device)
 
-                # Compute attack metric: Cosine similarity between aggregated actual and predicted embeddings
-                # Ensure dimensions match (should be batch_size, embedding_dim)
                 if avg_predicted_image_embeddings.shape == avg_image_embeddings.shape:
                     cosine_sim = F.cosine_similarity(avg_predicted_image_embeddings, avg_image_embeddings, dim=1).mean().item()
                     attack_metrics["attack_cosine_similarity"] = cosine_sim
@@ -194,31 +178,22 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
                      logger.log(WARN, f"Round {rnd}: Shape mismatch for attack evaluation: Predicted {avg_predicted_image_embeddings.shape}, Actual {avg_image_embeddings.shape}. Skipping attack metric.")
 
         parameters_aggregated = [None] * self.config.num_partitions
-        for cid, _, _ in text_client_results:
-            if cid < self.config.num_partitions: # Ensure index is within bounds
-                parameters_aggregated[cid] = avg_text_grads.cpu().numpy()
-
-        for cid, _ in image_client_results:
-            if cid < self.config.num_partitions: # Ensure index is within bounds
-                parameters_aggregated[cid] = avg_image_grads.cpu().numpy()
-
-        # Filter out None values if any client type didn't participate
-        parameters_aggregated = [p for p in parameters_aggregated if p is not None]
-        # Need to convert to flwr.common.Parameters type
+        for i in range(len(parameters_aggregated)):
+            if i % 2 == 0:
+                parameters_aggregated[i] = avg_image_grads.cpu().numpy()
+            else:
+                parameters_aggregated[i] = avg_text_grads.cpu().numpy()
+        
         parameters_aggregated = ndarrays_to_parameters(parameters_aggregated)
-
-
-        # --- Collect Metrics for Logging ---
+        
         metrics_aggregated = {
             "vfl_loss": vfl_loss.item(),
             "vfl_loss_img": loss_img.item(),
             "vfl_loss_txt": loss_txt.item(),
-            # Note: Accuracy calculation depends on server model output directly,
-            # which is based on aggregated embeddings. Let's keep the original accuracy calc.
             "i2t_acc": logits_per_image.argmax(dim=1).eq(labels).float().mean().item() * 100,
             "t2i_acc": logits_per_text.argmax(dim=1).eq(labels).float().mean().item() * 100,
             "avg_acc": (logits_per_image.argmax(dim=1).eq(labels).float().mean().item() + logits_per_text.argmax(dim=1).eq(labels).float().mean().item()) * 50,
-            **attack_metrics # Add attack metrics
+            **attack_metrics
         }
 
         self.store_results_and_log(
@@ -226,11 +201,7 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
             tag="aggregate_fit",
             results_dict=metrics_aggregated,
         )
-        # wandb.log is already called in store_results_and_log
-        # wandb.log(metrics_aggregated, step=rnd) # Remove this duplicate call
 
-
-        # Return aggregated parameters (gradients) and metrics
         return parameters_aggregated, metrics_aggregated
 
     def get_fit_config_fn(self, server_round):
