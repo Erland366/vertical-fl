@@ -176,3 +176,4 @@ testing_chamber/
 wandb/
 .vscode/
 outputs/
+attack_models/

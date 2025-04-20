@@ -1,0 +1,240 @@
+import json
+import flwr as fl
+import torch
+import wandb
+from logging import INFO, WARN
+from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays, logger
+from torch.nn import functional as F
+from datetime import datetime
+from pathlib import Path
+
+from vertical_fl.model import CLIPServerModel
+from dataclasses import dataclass
+
+def create_run_dir(config = None) -> Path:
+    """Create a directory where to save results from this run."""
+    current_time = datetime.now()
+    run_dir = current_time.strftime("%Y-%m-%d/%H-%M-%S")
+    save_path = Path.cwd() / f"outputs/{run_dir}"
+    save_path.mkdir(parents=True, exist_ok=False)
+
+    if config is not None:
+        with open(f"{save_path}/run_config.json", "w", encoding="utf-8") as fp:
+            json.dump(config, fp)
+
+    return save_path, run_dir
+
+@dataclass
+class ConfigServerAttack:
+    lr: float
+    num_rounds: int
+    batch_size: int
+
+    use_fixed_data: bool
+
+    aggregate_strategy: str
+
+    num_partitions: int | None = None
+    project_name: str = "VFL-CLIP-Attack"
+    run_name: str = "CLIP-FedAvg"
+
+    log_attack_metrics: bool = True
+    attack_model_path: str = None # Path to load the pre-trained attack model
+    attack_side_data_size: int = 0 # Number of samples to use for attack evaluation
+
+class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
+    def __init__(self, config: ConfigServerAttack, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.server_model = CLIPServerModel().to(self.device)
+        self.config = config
+        self.optimizer = torch.optim.AdamW(self.server_model.parameters(), lr=config.lr)
+
+        # TODO: Add config here later on
+        self.save_path, self.run_dir = create_run_dir()
+        self.results = {}
+
+        self._init_wandb_project()
+
+    def _init_wandb_project(self):
+        run_name = (
+            self.config.run_name.format(size=self.config.attack_side_data_size) +
+            f"_{self.config.aggregate_strategy}" + 
+            f"_p{self.config.num_partitions}" + 
+            f"_r{self.config.num_rounds}"
+        )
+        wandb.init(
+            project=self.config.project_name, 
+            name=run_name, 
+            config=self.config
+        )
+
+    def _store_results(self, tag: str, results_dict):
+        """Store results in dictionary, then save as JSON."""
+        # Update results dict
+        if tag in self.results:
+            self.results[tag].append(results_dict)
+        else:
+            self.results[tag] = [results_dict]
+
+        # Save results to disk.
+        # Note we overwrite the same file with each call to this function.
+        # While this works, a more sophisticated approach is preferred
+        # in situations where the contents to be saved are larger.
+        with open(f"{self.save_path}/results.json", "w", encoding="utf-8") as fp:
+            json.dump(self.results, fp)
+
+    def store_results_and_log(self, server_round: int, tag: str, results_dict):
+        """A helper method that stores results and logs them to W&B if enabled."""
+        self._store_results(
+            tag=tag,
+            results_dict={"round": server_round, **results_dict},
+        )
+        wandb.log(results_dict, step=server_round)
+
+    def aggregate_fit(
+        self,
+        rnd: int,
+        results,
+        failures,
+    ):
+        """Aggregate fit results."""
+        self.config.num_partitions = len(results)
+        if self.config.num_partitions % 2 != 0:
+             logger.log(WARN, f"Round {rnd}: Uneven number of clients ({self.config.num_partitions}). VFL pairing might be broken.")
+
+        if not self.accept_failures and failures:
+            return None, {}
+
+        image_client_results = []
+        text_client_results = []
+        for client, fit_res in results:
+            client_type = fit_res.metrics.get("client-type")
+            if client_type == "image":
+                image_embeddings_batch = parameters_to_ndarrays(fit_res.parameters)[0]
+                image_client_results.append((client.cid, image_embeddings_batch))
+            elif client_type == "text":
+                params = parameters_to_ndarrays(fit_res.parameters)
+                if len(params) >= 2: # Check if predicted embeddings are included
+                     text_embeddings_batch = params[0]
+                     predicted_image_embeddings_batch = params[1]
+                     text_client_results.append((client.cid, text_embeddings_batch, predicted_image_embeddings_batch))
+                else:
+                     logger.log(WARN, f"Client {client.cid}: Text client parameters too short ({len(params)}). Skipping attack prediction.")
+                     text_embeddings_batch = params[0]
+                     text_client_results.append((client.cid, text_embeddings_batch, None)) # Add None for missing prediction
+            else:
+                logger.log(WARN, f"Client {client.cid}: Unknown client type '{client_type}'. Skipping.")
+
+
+        if not image_client_results or not text_client_results:
+            logger.log(WARN, f"Round {rnd}: Missing image or text client results. Cannot perform VFL or attack evaluation.")
+            return None, {"error": "Missing image or text client results"}
+
+        # --- Aggregate Embeddings for VFL Training ---
+        # Sum embeddings from clients of the same type as done in original code
+        sum_image_embeddings = sum([emb for _, emb in image_client_results])
+        sum_text_embeddings = sum([emb for _, emb, _ in text_client_results if _ is not None]) # Sum only from clients that sent text embeddings
+
+        # Average aggregated embeddings
+        # Note: This averaging before projection is the behaviour of the original code.
+        # Standard VFL would typically concatenate features/embeddings.
+        num_image_clients = len(image_client_results)
+        num_text_clients = len(text_client_results)
+        
+        # Check if dimensions match before converting to tensor
+        if num_image_clients > 0 and num_text_clients > 0:
+             avg_image_embeddings = torch.from_numpy(sum_image_embeddings / num_image_clients).to(self.device)
+             avg_text_embeddings = torch.from_numpy(sum_text_embeddings / num_text_clients).to(self.device)
+        else:
+             logger.log(WARN, f"Round {rnd}: Not enough image or text clients. Skipping VFL step.")
+             return None, {"error": "Not enough image or text clients"}
+
+        # Ensure embeddings require grad for backprop
+        avg_image_embeddings.requires_grad_(True)
+        avg_text_embeddings.requires_grad_(True)
+
+        # --- Server Model Forward Pass and Loss ---
+        logits_per_image, logits_per_text = self.server_model(avg_image_embeddings, avg_text_embeddings)
+
+        batch_size = avg_image_embeddings.size(0) # Batch size is determined by client batch size
+        labels = torch.arange(batch_size, device=self.device).long() # Assuming instances are paired within the batch
+
+        loss_img = F.cross_entropy(logits_per_text.t(), labels)
+        loss_txt = F.cross_entropy(logits_per_text, labels)
+        vfl_loss = (loss_img + loss_txt) / 2.0
+        logger.log(INFO, f"Round {rnd} VFL loss: {vfl_loss.item()}")
+
+        # --- Server Model Backward Pass (to get embedding gradients) ---
+        self.optimizer.zero_grad() # Zero gradients for server model parameters
+        vfl_loss.backward()
+
+        # These are gradients w.r.t the *averaged* embeddings
+        avg_image_grads = avg_image_embeddings.grad.detach()
+        avg_text_grads = avg_text_embeddings.grad.detach()
+
+        # --- Attack Evaluation ---
+        attack_metrics = {}
+        if self.config.log_attack_metrics and num_text_clients > 0 and num_image_clients > 0:
+            # Aggregate predicted image embeddings
+            # Only average predictions from clients that actually sent them
+            predicted_embs_list = [pred_emb for _, _, pred_emb in text_client_results if pred_emb is not None]
+            if predicted_embs_list:
+                sum_predicted_image_embeddings = sum(predicted_embs_list)
+                # Note: Averaging by num_text_clients, assuming each text client predicts for its batch
+                avg_predicted_image_embeddings = torch.from_numpy(sum_predicted_image_embeddings / len(predicted_embs_list)).to(self.device)
+
+                # Compute attack metric: Cosine similarity between aggregated actual and predicted embeddings
+                # Ensure dimensions match (should be batch_size, embedding_dim)
+                if avg_predicted_image_embeddings.shape == avg_image_embeddings.shape:
+                    cosine_sim = F.cosine_similarity(avg_predicted_image_embeddings, avg_image_embeddings, dim=1).mean().item()
+                    attack_metrics["attack_cosine_similarity"] = cosine_sim
+                    logger.log(INFO, f"Round {rnd} Attack Cosine Similarity: {cosine_sim:.4f}")
+                else:
+                     logger.log(WARN, f"Round {rnd}: Shape mismatch for attack evaluation: Predicted {avg_predicted_image_embeddings.shape}, Actual {avg_image_embeddings.shape}. Skipping attack metric.")
+
+        parameters_aggregated = [None] * self.config.num_partitions
+        for cid, _, _ in text_client_results:
+            if cid < self.config.num_partitions: # Ensure index is within bounds
+                parameters_aggregated[cid] = avg_text_grads.cpu().numpy()
+
+        for cid, _ in image_client_results:
+            if cid < self.config.num_partitions: # Ensure index is within bounds
+                parameters_aggregated[cid] = avg_image_grads.cpu().numpy()
+
+        # Filter out None values if any client type didn't participate
+        parameters_aggregated = [p for p in parameters_aggregated if p is not None]
+        # Need to convert to flwr.common.Parameters type
+        parameters_aggregated = ndarrays_to_parameters(parameters_aggregated)
+
+
+        # --- Collect Metrics for Logging ---
+        metrics_aggregated = {
+            "vfl_loss": vfl_loss.item(),
+            "vfl_loss_img": loss_img.item(),
+            "vfl_loss_txt": loss_txt.item(),
+            # Note: Accuracy calculation depends on server model output directly,
+            # which is based on aggregated embeddings. Let's keep the original accuracy calc.
+            "i2t_acc": logits_per_image.argmax(dim=1).eq(labels).float().mean().item() * 100,
+            "t2i_acc": logits_per_text.argmax(dim=1).eq(labels).float().mean().item() * 100,
+            "avg_acc": (logits_per_image.argmax(dim=1).eq(labels).float().mean().item() + logits_per_text.argmax(dim=1).eq(labels).float().mean().item()) * 50,
+            **attack_metrics # Add attack metrics
+        }
+
+        self.store_results_and_log(
+            server_round=rnd,
+            tag="aggregate_fit",
+            results_dict=metrics_aggregated,
+        )
+        # wandb.log is already called in store_results_and_log
+        # wandb.log(metrics_aggregated, step=rnd) # Remove this duplicate call
+
+
+        # Return aggregated parameters (gradients) and metrics
+        return parameters_aggregated, metrics_aggregated
+
+    def get_fit_config_fn(self, server_round):
+        """Return a function which returns the fit configuration."""
+        def fit_config(server_round):
+            return {"server_round": server_round}
+        return fit_config

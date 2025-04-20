@@ -4,25 +4,25 @@ from dataclasses import asdict # Import asdict
 from logging import INFO, WARN
 
 # Import strategy and config from your project structure
-from vertical_fl.strategy import ConfigServer, CLIPFederatedStrategy
+from vertical_fl.strategy_attack import ConfigServerAttack, CLIPFederatedStrategyAttack
 
 
 def server_fn(context: Context) -> ServerAppComponents:
     """Construct components that set the ServerApp behaviour."""
     # Load configuration from the run config provided by flwr run
     run_conf = context.run_config
-    config = ConfigServer(
+    config = ConfigServerAttack(
         lr=run_conf.get("train.learning-rate", 5e-5),
         num_rounds=run_conf.get("num-server-rounds", 100),
         batch_size=run_conf.get("train.batch-size", 16),
         use_fixed_data=run_conf.get("use-fixed-data", False),
         aggregate_strategy=run_conf.get("aggregate-strategy", "reduce"),
-        # Attack config
-        perform_attack=run_conf.get("perform-attack", False),
-        num_attack_samples=run_conf.get("num-attack-samples", 0),
         # Logging config
         project_name=run_conf.get("log.project_name", "VFL-CLIP-Attack"),
         run_name=run_conf.get("log.run_name", "CLIP-Attack-Exp"),
+        log_attack_metrics=run_conf.get("log.log-attack-metrics", False),
+        attack_model_path=run_conf.get("attack.model_path", None),
+        attack_side_data_size=run_conf.get("attack.side_data_size", 0),
     )
 
     logger.log(INFO, f"Server initializing with config: {config}")
@@ -35,7 +35,7 @@ def server_fn(context: Context) -> ServerAppComponents:
     num_expected_clients = run_conf.get("num-supernodes", 2) # Get from federation config if possible
     min_clients = max(2, num_expected_clients) # Ensure at least one pair
 
-    strategy = CLIPFederatedStrategy(
+    strategy = CLIPFederatedStrategyAttack(
         config=config,
         min_fit_clients=min_clients,         # Minimum clients for training round
         min_available_clients=min_clients,   # Minimum clients required overall
@@ -50,8 +50,6 @@ def server_fn(context: Context) -> ServerAppComponents:
     # Return the components for the ServerApp
     return ServerAppComponents(strategy=strategy, config=server_config)
 
-# Create the Flower ServerApp
 app = ServerApp(
     server_fn=server_fn,
-    # Optionally add server-side middleware here if needed
 )

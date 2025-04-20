@@ -23,8 +23,8 @@ packages = ["."]
 publisher = "flwrlabs"
 
 [tool.flwr.app.components]
-serverapp = "vertical_fl.server_app_attack:app"
-clientapp = "vertical_fl.client_app_attack:app"
+serverapp = "vertical_fl.server_app:app"
+clientapp = "vertical_fl.client_app:app"
 
 [tool.flwr.app.config]
 num-server-rounds = 100
