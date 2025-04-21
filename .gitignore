@@ -177,3 +177,5 @@ wandb/
 .vscode/
 outputs/
 attack_models/
+attack_models_from_image/
+attack_models_from_text/

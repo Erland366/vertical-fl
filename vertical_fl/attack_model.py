@@ -12,3 +12,15 @@ class AttackFromTextNet(nn.Module):
 
     def forward(self, text_embeddings):
         return self.mlp(text_embeddings)
+
+class AttackFromImageNet(nn.Module):
+    def __init__(self, text_embedding_dim=512, image_embedding_dim=512):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(image_embedding_dim, image_embedding_dim * 2),
+            nn.ReLU(),
+            nn.Linear(image_embedding_dim * 2, text_embedding_dim),
+        )
+
+    def forward(self, image_embeddings):
+        return self.mlp(image_embeddings)

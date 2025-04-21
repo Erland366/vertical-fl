@@ -65,16 +65,16 @@ def main(side_data_size=None):
             text_embs, image_embs = text_embs.to(DEVICE), image_embs.to(DEVICE)
 
             optimizer.zero_grad()
-            predicted_image_embs = attack_net(text_embs)
-            loss = criterion(predicted_image_embs, image_embs)
+            predicted_text_embs = attack_net(image_embs)
+            loss = criterion(predicted_text_embs, text_embs)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
 
         print(f"Epoch {epoch+1}/{EPOCHS}, Loss: {total_loss / len(dataloader):.4f}")
 
-    os.makedirs("attack_models_from_text", exist_ok=True)
-    model_save_path = os.path.join("attack_models_from_text", f"attack_model_sidesize_{side_data_size}.pth")
+    os.makedirs("attack_models_from_image", exist_ok=True)
+    model_save_path = os.path.join("attack_models_from_image", f"attack_model_sidesize_{side_data_size}.pth")
     torch.save(attack_net.state_dict(), model_save_path)
     print(f"Attack model saved to {model_save_path}")
 
