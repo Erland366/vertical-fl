@@ -221,6 +221,7 @@ class ImageFlowerClientAttacker(NumPyClient):
         self.model_image = CLIPImageClient().to(self.device)
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16", do_rescale=False)
         self.optimizer = torch.optim.AdamW(self.model_image.parameters(), lr=config.lr)
+        self.config = config
 
         self.attack_model = None
         if self.config.attack_model_path and os.path.exists(self.config.attack_model_path):
