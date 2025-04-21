@@ -20,6 +20,7 @@ def server_fn(context: Context) -> ServerAppComponents:
         log_attack_metrics=run_conf.get("log.log-attack-metrics", False),
         attack_model_path=run_conf.get("attack.model_path", None),
         attack_side_data_size=run_conf.get("attack.side_data_size", 0),
+        whos_attacking=run_conf.get("attack.whos_attacking", "text"),  # "text" or "image"
     )
 
     logger.log(INFO, f"Server initializing with config: {config}")

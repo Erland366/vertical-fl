@@ -88,6 +88,7 @@ class TextFlowerClientAttacker(NumPyClient):
         self.attack_model = None
         if self.config.attack_model_path and os.path.exists(self.config.attack_model_path):
             self.attack_model = AttackFromTextNet().to(self.device)
+            assert "text" in self.config.attack_model_path, "Attack model path must contain 'text' to indicate it's a text attack model"
             self.attack_model.load_state_dict(torch.load(self.config.attack_model_path, map_location=self.device))
             self.attack_model.eval() # Attack model should be in eval mode during FL
             logger.log(INFO, f"Text client {partition_id} loaded attack model from {self.config.attack_model_path}")
@@ -224,6 +225,7 @@ class ImageFlowerClientAttacker(NumPyClient):
         self.attack_model = None
         if self.config.attack_model_path and os.path.exists(self.config.attack_model_path):
             self.attack_model = AttackFromImageNet().to(self.device)
+            assert "image" in self.config.attack_model_path, "Attack model path must contain 'image' to indicate it's a image attack model"
             self.attack_model.load_state_dict(torch.load(self.config.attack_model_path, map_location=self.device))
             self.attack_model.eval() # Attack model should be in eval mode during FL
             logger.log(INFO, f"Image client {partition_id} loaded attack model from {self.config.attack_model_path}")

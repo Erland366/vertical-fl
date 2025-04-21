@@ -41,6 +41,7 @@ class ConfigServerAttack:
     log_attack_metrics: bool = True
     attack_model_path: str = None # Path to load the pre-trained attack model
     attack_side_data_size: int = 0 # Number of samples to use for attack evaluation
+    whos_attacking: str = "text" # "text" or "image"
 
 class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
     def __init__(self, config: ConfigServerAttack, *args, **kwargs) -> None:
