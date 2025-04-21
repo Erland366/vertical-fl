@@ -246,7 +246,7 @@ class ImageFlowerClientAttacker(NumPyClient):
         if self.attack_model is not None:
              with torch.no_grad():
                  predicted_text_embeddings = self.attack_model(image_embeddings)
-             logger.log(INFO, f"Text client {self.partition_id} predicted image embeddings.")
+             logger.log(INFO, f"Image client {self.partition_id} predicted image embeddings.")
 
         params_to_send = [image_embeddings.detach().cpu().numpy()]
         if predicted_text_embeddings is not None:
