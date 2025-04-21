@@ -254,7 +254,7 @@ class ImageFlowerClientAttacker(NumPyClient):
 
         num_examples = len(self.data)
 
-        metrics = {"client-type": "text"}
+        metrics = {"client-type": "image"}
 
         return params_to_send, num_examples, metrics
 
