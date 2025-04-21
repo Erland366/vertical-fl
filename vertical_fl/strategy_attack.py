@@ -113,8 +113,9 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
         for client, fit_res in results:
             client_type = fit_res.metrics.get("client-type")
             if client_type == "image":
-                params_image = parameters_to_ndarrays(fit_res.parameters)[0]
+                params_image = parameters_to_ndarrays(fit_res.parameters)
                 if len(params_image) >= 2:
+                    logger.log(INFO, f"Client {client.cid}: Predicted Text client parameters received, doing attack from Image.")
                     image_embeddings_batch = params_image[0]
                     predicted_text_embeddings_batch = params_image[1]
                     image_client_results.append((client.cid, image_embeddings_batch, predicted_text_embeddings_batch))
@@ -123,18 +124,17 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
                     image_embeddings_batch = params_image[0]
                     # Add None for missing prediction
                     image_client_results.append((client.cid, image_embeddings_batch, None))
-
-                image_client_results.append((client.cid, image_embeddings_batch))
             elif client_type == "text":
                 params_text = parameters_to_ndarrays(fit_res.parameters)
                 if len(params_text) >= 2:
-                     text_embeddings_batch = params_text[0]
-                     predicted_image_embeddings_batch = params_text[1]
-                     text_client_results.append((client.cid, text_embeddings_batch, predicted_image_embeddings_batch))
+                    logger.log(INFO, f"Client {client.cid}: Predicted Image client parameters received, doing attack from Text.")
+                    text_embeddings_batch = params_text[0]
+                    predicted_image_embeddings_batch = params_text[1]
+                    text_client_results.append((client.cid, text_embeddings_batch, predicted_image_embeddings_batch))
                 else:
-                     logger.log(WARN, f"Client {client.cid}: Text client parameters too short ({len(params_text)}). Skipping attack prediction.")
-                     text_embeddings_batch = params_text[0]
-                     text_client_results.append((client.cid, text_embeddings_batch, None)) # Add None for missing prediction
+                    logger.log(WARN, f"Client {client.cid}: Text client parameters too short ({len(params_text)}). Skipping attack prediction.")
+                    text_embeddings_batch = params_text[0]
+                    text_client_results.append((client.cid, text_embeddings_batch, None)) # Add None for missing prediction
             else:
                 logger.log(WARN, f"Client {client.cid}: Unknown client type '{client_type}'. Skipping.")
 
@@ -143,12 +143,12 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
             logger.log(WARN, f"Round {rnd}: Missing image or text client results. Cannot perform VFL or attack evaluation.")
             return None, {"error": "Missing image or text client results"}
 
-        sum_image_embeddings = sum([emb for _, emb in image_client_results])
-        sum_text_embeddings = sum([emb for _, emb, _ in text_client_results if _ is not None]) # Sum only from clients that sent text embeddings
-
+        sum_text_embeddings = sum([emb for _, emb, _ in text_client_results])
+        sum_image_embeddings = sum([emb for _, emb, _ in image_client_results])
+        
         num_image_clients = len(image_client_results)
         num_text_clients = len(text_client_results)
-        
+
         if num_image_clients > 0 and num_text_clients > 0:
              avg_image_embeddings = torch.from_numpy(sum_image_embeddings / num_image_clients).to(self.device)
              avg_text_embeddings = torch.from_numpy(sum_text_embeddings / num_text_clients).to(self.device)
@@ -178,6 +178,7 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
 
         attack_metrics = {}
         predicted_embs_list_text = [pred_emb for _, _, pred_emb in text_client_results if pred_emb is not None]
+
         if predicted_embs_list_text:
             sum_predicted_image_embeddings = sum(predicted_embs_list_text)
             avg_predicted_image_embeddings = torch.from_numpy(sum_predicted_image_embeddings / len(predicted_embs_list_text)).to(self.device)
@@ -185,7 +186,7 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
             if avg_predicted_image_embeddings.shape == avg_image_embeddings.shape:
                 cosine_sim = F.cosine_similarity(avg_predicted_image_embeddings, avg_image_embeddings, dim=1).mean().item()
                 attack_metrics["attack_cosine_similarity_text"] = cosine_sim
-                logger.log(INFO, f"Round {rnd} Attack Cosine Similarity: {cosine_sim:.4f}")
+                logger.log(INFO, f"Round {rnd} Attack To Text Cosine Similarity: {cosine_sim:.4f}")
             else:
                 logger.log(WARN, f"Round {rnd}: Shape mismatch for attack evaluation: Predicted {avg_predicted_image_embeddings.shape}, Actual {avg_image_embeddings.shape}. Skipping attack metric.")
 
@@ -197,7 +198,7 @@ class CLIPFederatedStrategyAttack(fl.server.strategy.FedAvg):
             if avg_predicted_text_embeddings.shape == avg_text_embeddings.shape:
                 cosine_sim = F.cosine_similarity(avg_predicted_text_embeddings, avg_text_embeddings, dim=1).mean().item()
                 attack_metrics["attack_cosine_similarity_image"] = cosine_sim
-                logger.log(INFO, f"Round {rnd} Attack Cosine Similarity: {cosine_sim:.4f}")
+                logger.log(INFO, f"Round {rnd} Attack To Image Cosine Similarity: {cosine_sim:.4f}")
             else:
                 logger.log(WARN, f"Round {rnd}: Shape mismatch for attack evaluation: Predicted {avg_predicted_text_embeddings.shape}, Actual {avg_text_embeddings.shape}. Skipping attack metric.")
 

@@ -37,7 +37,7 @@ log.project_name = "VFL-CLIP-Attack" # New project name for attack experiments
 log.run_name = "Attack-SideData{size}" # Use run name template for Wandb
 
 # Attack Configuration
-attack.model_path = "attack_models/attack_model_sidesize_10.pth" # Placeholder, replace {size} or manage dynamically
+attack.model_path = "attack_models_from_image/attack_model_sidesize_10.pth" # Placeholder, replace {size} or manage dynamically
 attack.side_data_size = 10 # Placeholder, configure this for experiments
 attack.whos_attacking = "image"
 
