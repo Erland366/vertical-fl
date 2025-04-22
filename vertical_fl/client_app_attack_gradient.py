@@ -4,7 +4,7 @@ from transformers import CLIPProcessor
 from vertical_fl.model import CLIPTextClient, CLIPImageClient
 from vertical_fl.data_loader import load_fixed_data, load_datasets
 from vertical_fl.attack_model import AttackFromTextNetWithGradient, AttackFromImageNetWithGradient
-from logging import INFO
+from logging import INFO, WARN
 from dataclasses import dataclass
 import wandb
 import os
@@ -55,7 +55,6 @@ class TextFlowerClientAttackerGradient(NumPyClient):
         self.optimizer = torch.optim.AdamW(self.model_text.parameters(), lr=config.lr)
 
         self.attack_model = None
-        self.last_fit_embedding = None 
 
         if self.config.attack_active_online and self.config.whos_attacking == 'text':
             if self.config.attack_model_path and os.path.exists(self.config.attack_model_path):
@@ -85,8 +84,6 @@ class TextFlowerClientAttackerGradient(NumPyClient):
         with torch.no_grad():
             text_embeddings = self.model_text(**text_inputs)
 
-        self.last_fit_embedding = text_embeddings.detach().clone()
-
         params_to_send = [text_embeddings.cpu().numpy()]
         num_examples = len(self.data)
         metrics = {"client-type": "text"}
@@ -103,10 +100,7 @@ class TextFlowerClientAttackerGradient(NumPyClient):
         text_inputs = {k: v.to(self.device) for k, v in text_inputs.items()}
         text_embeddings_for_update = self.model_text(**text_inputs)
 
-        # 2. Get Gradient from Server
         try:
-            # Parameters now contain the gradients, indexed by partition ID (or a better mapping)
-            # Assuming simple modulo mapping for simulation
             grad_tensor_np = parameters[self.partition_id]
             server_grad = torch.from_numpy(grad_tensor_np).to(self.device)
             if server_grad.shape != text_embeddings_for_update.shape:
@@ -121,28 +115,27 @@ class TextFlowerClientAttackerGradient(NumPyClient):
             return 0.0, 0, {"error": f"Exception getting gradient: {e}"}
 
 
-        # 3. Perform Attack Inference (if active attacker)
-        if self.attack_model is not None and self.last_fit_embedding is not None:
-            if self.last_fit_embedding.shape[0] == server_grad.shape[0]: # Check batch size consistency
-                attack_input_emb = self.last_fit_embedding
+        client_metrics = {
+            "attack_performed" : False
+        }
+
+        if self.attack_model is not None:
+            client_metrics["attack_performed"] = True
+            if text_embeddings_for_update.shape[0] == server_grad.shape[0]: # Check batch size consistency
+                attack_input_emb = text_embeddings_for_update.detach()
                 attack_input_grad = server_grad
 
-                with torch.no_grad(): # Inference only
+                with torch.no_grad():
                     predicted_image_embedding = self.attack_model(attack_input_emb, attack_input_grad)
 
-                # Log predictions using wandb
-                if self.config.log_attack_predictions_client and wandb.run is not None:
-                    try:
-                        log_data = {
-                             f"client_{self.partition_id}_prediction/image_emb_mean": predicted_image_embedding.mean().item(),
-                             f"client_{self.partition_id}_prediction/image_emb_std": predicted_image_embedding.std().item(),
-                             # "client_{self.partition_id}_predicted_image_embedding": wandb.Histogram(predicted_image_embedding.cpu().numpy()),
-                        }
-                        wandb.log(log_data, step=server_round)
-                    except Exception as e:
-                         logger.log(WARN, f"Client {self.partition_id} (Text): Failed to log attack predictions to WandB: {e}")
+                try:
+                    client_metrics[f"client_prediction/text_emb_mean"] = predicted_image_embedding.mean().item()
+                    client_metrics[f"client_prediction/text_emb_std"] = predicted_image_embedding.std().item()
+                    logger.log(INFO, f"Client {self.partition_id} (Text): Attack prediction logged: {client_metrics}")
+                except Exception as e:
+                    logger.log(WARN, f"Client {self.partition_id} (Text): Failed to log attack predictions to WandB: {e}")
             else:
-                 logger.log(WARN, f"Client {self.partition_id} (Text): Batch size mismatch between last embedding ({self.last_fit_embedding.shape[0]}) and gradient ({server_grad.shape[0]}). Skipping attack inference.")
+                 logger.log(WARN, f"Client {self.partition_id} (Text): Batch size mismatch between last embedding ({text_embeddings_for_update.shape[0]}) and gradient ({server_grad.shape[0]}). Skipping attack inference.")
 
 
         # 4. Perform VFL Model Update
@@ -155,7 +148,7 @@ class TextFlowerClientAttackerGradient(NumPyClient):
 
         num_examples = len(self.data)
         # Return dummy loss/metrics as evaluate's primary role here is update/attack
-        return 0.0, num_examples, {"attack_performed": (self.attack_model is not None)}
+        return 0.0, num_examples, client_metrics
 
 
 class ImageFlowerClientAttackerGradient(NumPyClient):
@@ -171,7 +164,6 @@ class ImageFlowerClientAttackerGradient(NumPyClient):
         self.optimizer = torch.optim.AdamW(self.model_image.parameters(), lr=config.lr)
 
         self.attack_model = None
-        self.last_fit_embedding = None # Store embedding from fit
 
         if self.config.attack_active_online and self.config.whos_attacking == 'image':
             if self.config.attack_model_path and os.path.exists(self.config.attack_model_path):
@@ -203,8 +195,6 @@ class ImageFlowerClientAttackerGradient(NumPyClient):
         with torch.no_grad():
             image_embeddings = self.model_image(**image_inputs)
 
-        self.last_fit_embedding = image_embeddings.detach().clone()
-
         params_to_send = [image_embeddings.cpu().numpy()]
         num_examples = len(self.data)
         metrics = {"client-type": "image"}
@@ -235,26 +225,27 @@ class ImageFlowerClientAttackerGradient(NumPyClient):
              logger.log(WARN, f"Client {self.partition_id} (Image): ERROR - Exception getting gradient: {e}")
              return 0.0, 0, {"error": f"Exception getting gradient: {e}"}
 
-        if self.attack_model is not None and self.last_fit_embedding is not None:
-            if self.last_fit_embedding.shape[0] == server_grad.shape[0]: # Check batch size consistency
-                attack_input_emb = self.last_fit_embedding
+        client_metrics = {
+            "attack_performed" : False
+        }
+
+        if self.attack_model is not None:
+            client_metrics["attack_performed"] = True
+            if image_embeddings_for_update.shape[0] == server_grad.shape[0]: # Check batch size consistency
+                attack_input_emb = image_embeddings_for_update.detach()
                 attack_input_grad = server_grad
 
                 with torch.no_grad():
                     predicted_text_embedding = self.attack_model(attack_input_emb, attack_input_grad)
 
-                if self.config.log_attack_predictions_client and wandb.run is not None:
-                    try:
-                        log_data = {
-                            f"client_{self.partition_id}_prediction/text_emb_mean": predicted_text_embedding.mean().item(),
-                            f"client_{self.partition_id}_prediction/text_emb_std": predicted_text_embedding.std().item(),
-                            # "client_{self.partition_id}_predicted_text_embedding": wandb.Histogram(predicted_text_embedding.cpu().numpy()),
-                        }
-                        wandb.log(log_data, step=server_round)
-                    except Exception as e:
-                        logger.log(WARN, f"Client {self.partition_id} (Image): Failed to log attack predictions to WandB: {e}")
+                try:
+                    client_metrics[f"client_prediction/image_emb_mean"] = predicted_text_embedding.mean().item()
+                    client_metrics[f"client_prediction/image_emb_std"] = predicted_text_embedding.std().item()
+                    logger.log(INFO, f"Client {self.partition_id} (Image): Attack prediction logged: {client_metrics}")
+                except Exception as e:
+                    logger.log(WARN, f"Client {self.partition_id} (Image): Failed to log attack predictions to WandB: {e}")
             else:
-                 logger.log(WARN, f"Client {self.partition_id} (Image): Batch size mismatch between last embedding ({self.last_fit_embedding.shape[0]}) and gradient ({server_grad.shape[0]}). Skipping attack inference.")
+                 logger.log(WARN, f"Client {self.partition_id} (Image): Batch size mismatch between last embedding ({image_embeddings_for_update.shape[0]}) and gradient ({server_grad.shape[0]}). Skipping attack inference.")
 
 
         try:
@@ -264,7 +255,7 @@ class ImageFlowerClientAttackerGradient(NumPyClient):
              logger.log(WARN, f"Client {self.partition_id} (Image): ERROR during model update: {e}")
 
         num_examples = len(self.data)
-        return 0.0, num_examples, {"attack_performed": (self.attack_model is not None)}
+        return 0.0, num_examples, client_metrics
 
 
 class TextFlowerClient(NumPyClient):
@@ -324,7 +315,6 @@ class TextFlowerClient(NumPyClient):
 
 
 class ImageFlowerClient(NumPyClient):
-
      def __init__(self, train_image, partition_id: int, config: ConfigClientAttackGradient):
          super().__init__()
          self.properties = {"client_type" : "image"}

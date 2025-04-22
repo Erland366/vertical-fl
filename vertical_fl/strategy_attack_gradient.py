@@ -239,9 +239,41 @@ class CLIPFederatedStrategyAttackGradient(fl.server.strategy.FedAvg):
     def aggregate_evaluate(self, server_round, results, failures):
         """Aggregate evaluation results."""
         if not results:
+            logger.log(WARN, f"Round {server_round}: No evaluation results received.")
             return None, {}
-        # Process results if clients return anything meaningful from evaluate
-        # For now, the main metrics come from aggregate_fit
-        logger.log(INFO, f"Round {server_round}: Received evaluate results (currently ignored in aggregation).")
-        # Return dummy loss/metrics, actual performance is in aggregate_fit logs
-        return 0.0, {"evaluate_agg_placeholder": 0.0}
+
+        if failures:
+            logger.log(WARN, f"Round {server_round}: Evaluation failures: {failures}")
+
+        aggregated_client_metrics = {}
+        num_results = len(results)
+
+        for client, evaluate_res in results:
+            cid = client.cid
+            client_metrics = evaluate_res.metrics
+
+            if not client_metrics:
+                logger.log(INFO, f"Round {server_round}: Client {cid} sent empty metrics. Skipping.")
+                continue
+
+            for key, value in client_metrics.items():
+                if key not in aggregated_client_metrics:
+                    aggregated_client_metrics[key] = 0.0
+                aggregated_client_metrics[key] += value
+
+        if not aggregated_client_metrics:
+            logger.log(INFO, f"Round {server_round}: No metrics to aggregate.")
+            return None, {}
+
+
+        if wandb.run is not None:
+            try:
+                wandb.log(aggregated_client_metrics, step=server_round)
+                logger.log(INFO, f"Round {server_round}: Logged evaluation metrics to WandB.")
+            except Exception as e:
+                logger.log(WARN, f"Round {server_round}: Failed to log evaluation metrics to WandB: {e}")
+
+        else:
+            logger.log(WARN, f"Round {server_round}: WandB is not initialized. Skipping logging.")
+
+        return 0.0, aggregated_client_metrics
