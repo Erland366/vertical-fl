@@ -24,6 +24,9 @@ def server_fn(context: Context) -> ServerAppComponents:
         log_attack_predictions_client=run_conf.get("log.log_attack_predictions_client", False),
         attack_active_online=run_conf.get("attack.active_online", False),
         log_ground_truth_server=run_conf.get("log.log_ground_truth_server", False),
+        attack_rounds_to_train_online=run_conf.get("attack.rounds_to_train_online", 0),
+        
+
     )
 
     logger.log(INFO, f"Server initializing with config: {config}")

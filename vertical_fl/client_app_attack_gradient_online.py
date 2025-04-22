@@ -13,6 +13,9 @@ import torch
 import functools # NOT IDEAL WTF
 import lovely_tensors as lt; lt.monkey_patch()
 
+ATTACK_STATE_DIR = "attack_states"
+os.makedirs(ATTACK_STATE_DIR, exist_ok=True)
+
 _CACHED_IMAGE_DATA = None
 _CACHED_TEXT_DATA = None
 
@@ -59,6 +62,8 @@ class TextFlowerClientAttackerGradientOnline(NumPyClient):
 
         self.attack_model = None
         self.attack_optimizer = None
+        self.attack_state_path = None
+        self.loaded_state = False
         # Load victim's encoder (Image Encoder) - frozen
         self.victim_encoder = CLIPImageClient().to(self.device)
         self.victim_encoder.eval()
@@ -67,19 +72,32 @@ class TextFlowerClientAttackerGradientOnline(NumPyClient):
             param.requires_grad = False
 
         if self.config.attack_active_online and self.config.whos_attacking == 'text':
-            if self.config.attack_model_path and os.path.exists(self.config.attack_model_path):
+            self.attack_state_path = os.path.join(ATTACK_STATE_DIR, f"attack_state_text_{self.partition_id}.pt")
+            self.attack_model = AttackFromTextNetWithGradient().to(self.device)
+            loaded_state = False
+            if os.path.exists(self.attack_state_path):
                 try:
-                    self.attack_model = AttackFromTextNetWithGradient().to(self.device)
+                    self.attack_model.load_state_dict(torch.load(self.attack_state_path, map_location=self.device))
+                    logger.log(INFO, f"Text client {partition_id} loaded attack model state from {self.attack_state_path}")
+                    self.loaded_state = True
+                except Exception as e:
+                    logger.log(WARN, f"Text client {partition_id}: Failed to load attack model state from {self.attack_state_path}. Error: {e}")
+                    self.loaded_state = False
+            elif self.config.attack_model_path and os.path.exists(self.config.attack_model_path):
+                try:
                     self.attack_model.load_state_dict(torch.load(self.config.attack_model_path, map_location=self.device))
-                    # self.attack_model.eval() 
+                    self.loaded_state = True
                     logger.log(INFO, f"Text client {partition_id} loaded attack model from {self.config.attack_model_path}")
-                    self.attack_optimizer = torch.optim.AdamW(self.attack_model.parameters(), lr = self.config.attack_lr)
                 except Exception as e:
                     logger.log(WARN, f"Text client {partition_id}: Failed to load attack model from {self.config.attack_model_path}. Error: {e}")
-                    self.attack_model = None
-                    self.attack_optimizer = None
             else:
                 logger.log(WARN, f"Text client {partition_id}: Attack active but model path '{self.config.attack_model_path}' not found or not specified.")
+
+            if loaded_state:
+                self.attack_optimizer = torch.optim.AdamW(self.attack_model.parameters(), lr = self.config.attack_lr)
+            else:
+                self.attack_optimizer = None
+                logger.log(WARN, f"Text client {partition_id}: Attack model state not loaded. Attack inactive.")
         elif self.config.attack_active_online and self.config.whos_attacking != 'text':
              logger.log(INFO, f"Text client {partition_id}: Attack inactive for this client type.")
 
@@ -150,6 +168,12 @@ class TextFlowerClientAttackerGradientOnline(NumPyClient):
                 client_metrics["online_attack_loss"] = attack_loss.item()
                 logger.log(INFO, f"Client {self.partition_id} (Text): Attack loss logged: {client_metrics}")
 
+                try:
+                    torch.save(self.attack_model.state_dict(), self.attack_state_path)
+                    logger.log(INFO, f"Client {self.partition_id} (Text): Attack model state saved to {self.attack_state_path}")
+                except Exception as e:
+                    logger.log(WARN, f"Client {self.partition_id} (Text): Failed to save attack model state: {e}")
+
             except Exception as e:
                 logger.log(WARN, f"Client {self.partition_id} (Text): Failed to compute attack loss: {e}")
                 client_metrics["online_attack_error"] = 1
@@ -203,6 +227,8 @@ class ImageFlowerClientAttackerGradientOnline(NumPyClient):
 
         self.attack_model = None
         self.attack_optimizer = None
+        self.attack_state_path = None
+        loaded_state = False
 
         self.victim_encoder = CLIPTextClient().to(self.device)
         self.victim_encoder.eval()
@@ -210,20 +236,35 @@ class ImageFlowerClientAttackerGradientOnline(NumPyClient):
             param.requires_grad = False
 
         if self.config.attack_active_online and self.config.whos_attacking == 'image':
-            if self.config.attack_model_path and os.path.exists(self.config.attack_model_path):
+            self.attack_state_path = os.path.join(ATTACK_STATE_DIR, f"attack_state_image_{self.partition_id}.pt")
+            self.attack_model = AttackFromImageNetWithGradient().to(self.device)
+            loaded_state = False
+
+            if os.path.exists(self.attack_state_path):
                 try:
-                     # Ensure correct attack model is loaded
-                    self.attack_model = AttackFromImageNetWithGradient().to(self.device)
+                    self.attack_model.load_state_dict(torch.load(self.attack_state_path, map_location=self.device))
+                    logger.log(INFO, f"Image client {partition_id} loaded attack model state from {self.attack_state_path}")
+                    loaded_state = True
+                except Exception as e:
+                    logger.log(WARN, f"Image client {partition_id}: Failed to load attack model state from {self.attack_state_path}. Error: {e}")
+                    loaded_state = False
+            elif self.config.attack_model_path and os.path.exists(self.config.attack_model_path):
+                try:
                     self.attack_model.load_state_dict(torch.load(self.config.attack_model_path, map_location=self.device))
-                    self.attack_model.eval() # Set to evaluation mode
+                    loaded_state = True
+                    # self.attack_model.eval() # Set to evaluation mode
                     logger.log(INFO, f"Image client {partition_id} loaded attack model from {self.config.attack_model_path}")
-                    self.attack_optimizer = torch.optim.AdamW(self.attack_model.parameters(), lr = self.config.attack_lr)
                 except Exception as e:
                     logger.log(WARN, f"Image client {partition_id}: Failed to load attack model from {self.config.attack_model_path}. Error: {e}")
-                    self.attack_model = None
-                    self.attack_optimizer = None
+                    loaded_state = False
             else:
                 logger.log(WARN, f"Image client {partition_id}: Attack active but model path '{self.config.attack_model_path}' not found or not specified.")
+
+            if loaded_state:
+                self.attack_optimizer = torch.optim.AdamW(self.attack_model.parameters(), lr = self.config.attack_lr)
+            else:
+                self.attack_optimizer = None
+                logger.log(WARN, f"Image client {partition_id}: Attack model state not loaded. Attack inactive.")
         elif self.config.attack_active_online and self.config.whos_attacking != 'image':
             logger.log(INFO, f"Image client {partition_id}: Attack inactive for this client type.")
 
@@ -296,6 +337,12 @@ class ImageFlowerClientAttackerGradientOnline(NumPyClient):
                 self.attack_optimizer.step()
                 client_metrics["online_attack_loss"] = attack_loss.item()
                 logger.log(INFO, f"Client {self.partition_id} (Image): Attack loss logged: {client_metrics}")
+
+                try:
+                    torch.save(self.attack_model.state_dict(), self.attack_state_path)
+                    logger.log(INFO, f"Client {self.partition_id} (Image): Attack model state saved to {self.attack_state_path}")
+                except Exception as e:
+                    logger.log(WARN, f"Client {self.partition_id} (Image): Failed to save attack model state: {e}")
             except Exception as e:
                 logger.log(WARN, f"Client {self.partition_id} (Image): Failed to compute attack loss: {e}")
                 client_metrics["online_attack_error"] = 1
