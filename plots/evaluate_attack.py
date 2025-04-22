@@ -41,8 +41,8 @@ def fetch_run_data(api, entity, project, run_id):
 def get_comparison_keys(run_config, history_df):
     """Determines the metric keys to compare based on who was attacking."""
     # --- Determine Attacker Type ---
-    # whos_attacking = run_config.get("attack_whos_attacking", run_config.get("whos_attacking", "text"))
-    whos_attacking = "text"
+    whos_attacking = run_config.get("attack_whos_attacking", run_config.get("whos_attacking", "text"))
+    # whos_attacking = "text"
     print(f"Determined attacker type: {whos_attacking}")
 
     # --- Determine Client Namespace ---
