@@ -71,7 +71,8 @@ class CLIPFederatedStrategyAttackGradientOnline(fl.server.strategy.FedAvg):
             f"_p{self.config.num_partitions}" + 
             f"_r{self.config.num_rounds}" +
             f"_or{self.config.attack_rounds_to_train_online}" +
-            f"_attackgradientonline-{self.config.whos_attacking}"
+            f"_attackgradientonline-{self.config.whos_attacking}" + 
+            "FR"
         )
         wandb.init(
             project=self.config.wandb_project, 
