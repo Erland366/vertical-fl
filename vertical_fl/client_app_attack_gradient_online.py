@@ -73,7 +73,7 @@ class TextFlowerClientAttackerGradientOnline(NumPyClient):
                     self.attack_model.load_state_dict(torch.load(self.config.attack_model_path, map_location=self.device))
                     # self.attack_model.eval() 
                     logger.log(INFO, f"Text client {partition_id} loaded attack model from {self.config.attack_model_path}")
-                    self.attack_optimizer = torch.optim.AdamW(self.atack_model.parameters(), lr = self.config.attack_lr)
+                    self.attack_optimizer = torch.optim.AdamW(self.attack_model.parameters(), lr = self.config.attack_lr)
                 except Exception as e:
                     logger.log(WARN, f"Text client {partition_id}: Failed to load attack model from {self.config.attack_model_path}. Error: {e}")
                     self.attack_model = None
@@ -490,13 +490,12 @@ def client_fn(context: Context):
         train_image_iterator = _CACHED_IMAGE_LOADER
         train_text_iterator = _CACHED_TEXT_LOADER
 
+        train_image = next(train_image_iterator)
+        train_text = next(train_text_iterator)
+        _CACHED_IMAGE_DATA = train_image
+        _CACHED_TEXT_DATA = train_text
+
         if client_type == "image":
-            train_image = next(train_image_iterator)
-            train_text = next(train_text_iterator)
-            _CACHED_IMAGE_DATA = train_image
-            _CACHED_TEXT_DATA = train_text
-        if client_type == "image":
-            logger.log(INFO, f"{train_image}")
             if config.whos_attacking == "image":
                 return ImageFlowerClientAttackerGradientOnline(_CACHED_IMAGE_DATA, _CACHED_TEXT_DATA, partition_id, config).to_client()
             else:
