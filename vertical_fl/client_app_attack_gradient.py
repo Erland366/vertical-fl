@@ -129,8 +129,8 @@ class TextFlowerClientAttackerGradient(NumPyClient):
                     predicted_image_embedding = self.attack_model(attack_input_emb, attack_input_grad)
 
                 try:
-                    client_metrics[f"client_prediction/text_emb_mean"] = predicted_image_embedding.mean().item()
-                    client_metrics[f"client_prediction/text_emb_std"] = predicted_image_embedding.std().item()
+                    client_metrics[f"client_prediction/image_emb_mean"] = predicted_image_embedding.mean().item()
+                    client_metrics[f"client_prediction/image_emb_std"] = predicted_image_embedding.std().item()
                     logger.log(INFO, f"Client {self.partition_id} (Text): Attack prediction logged: {client_metrics}")
                 except Exception as e:
                     logger.log(WARN, f"Client {self.partition_id} (Text): Failed to log attack predictions to WandB: {e}")
@@ -239,8 +239,8 @@ class ImageFlowerClientAttackerGradient(NumPyClient):
                     predicted_text_embedding = self.attack_model(attack_input_emb, attack_input_grad)
 
                 try:
-                    client_metrics[f"client_prediction/image_emb_mean"] = predicted_text_embedding.mean().item()
-                    client_metrics[f"client_prediction/image_emb_std"] = predicted_text_embedding.std().item()
+                    client_metrics[f"client_prediction/text_emb_mean"] = predicted_text_embedding.mean().item()
+                    client_metrics[f"client_prediction/text_emb_std"] = predicted_text_embedding.std().item()
                     logger.log(INFO, f"Client {self.partition_id} (Image): Attack prediction logged: {client_metrics}")
                 except Exception as e:
                     logger.log(WARN, f"Client {self.partition_id} (Image): Failed to log attack predictions to WandB: {e}")
