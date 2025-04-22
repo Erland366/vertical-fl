@@ -46,6 +46,13 @@ class ConfigClientAttackGradientOnline:
     attack_active_online: bool = True 
     log_attack_predictions_client: bool = True 
 
+    # TODO: This is not scalable! We hardcoded the path
+    # Ideally, we add the partition id but sadly we cannot pass the path to the evaluation (for saving)
+    # We cannot also save the path using class attribute since it always gets instantiated -> Back to None somehow?
+    # NOTE: THIS IS NOT WORKING, WE HARDCODED THEM IN THE BOTTOM
+    attack_state_image: str = os.path.join(ATTACK_STATE_DIR, f"attack_state_image.pt")
+    attack_state_text: str = os.path.join(ATTACK_STATE_DIR, f"attack_state_text.pt")
+
 
 class TextFlowerClientAttackerGradientOnline(NumPyClient):
     def __init__(self, train_text, eval_image, partition_id: int, config: ConfigClientAttackGradientOnline):
@@ -72,13 +79,13 @@ class TextFlowerClientAttackerGradientOnline(NumPyClient):
             param.requires_grad = False
 
         if self.config.attack_active_online and self.config.whos_attacking == 'text':
-            self.attack_state_path = os.path.join(ATTACK_STATE_DIR, f"attack_state_text_{self.partition_id}.pt")
+            self.attack_state_path = self.config.attack_state_text
             self.attack_model = AttackFromTextNetWithGradient().to(self.device)
-            loaded_state = False
+            self.loaded_state = False
             if os.path.exists(self.attack_state_path):
                 try:
                     self.attack_model.load_state_dict(torch.load(self.attack_state_path, map_location=self.device))
-                    logger.log(INFO, f"Text client {partition_id} loaded attack model state from {self.attack_state_path}")
+                    logger.log(INFO, f"Text client {partition_id} loaded saved state attack model state from {self.attack_state_path}")
                     self.loaded_state = True
                 except Exception as e:
                     logger.log(WARN, f"Text client {partition_id}: Failed to load attack model state from {self.attack_state_path}. Error: {e}")
@@ -90,10 +97,11 @@ class TextFlowerClientAttackerGradientOnline(NumPyClient):
                     logger.log(INFO, f"Text client {partition_id} loaded attack model from {self.config.attack_model_path}")
                 except Exception as e:
                     logger.log(WARN, f"Text client {partition_id}: Failed to load attack model from {self.config.attack_model_path}. Error: {e}")
+                    self.loaded_state = False
             else:
                 logger.log(WARN, f"Text client {partition_id}: Attack active but model path '{self.config.attack_model_path}' not found or not specified.")
 
-            if loaded_state:
+            if self.loaded_state:
                 self.attack_optimizer = torch.optim.AdamW(self.attack_model.parameters(), lr = self.config.attack_lr)
             else:
                 self.attack_optimizer = None
@@ -147,6 +155,7 @@ class TextFlowerClientAttackerGradientOnline(NumPyClient):
 
         # Online Attack Training Step
         if self.attack_model is not None and self.attack_optimizer is not None and server_round < self.config.attack_rounds_to_train_online:
+            logger.log(INFO, "Entering online attack training step for text client.")
             client_metrics["online_attack_trained"] = True
             self.attack_model.train()
             self.attack_optimizer.zero_grad()
@@ -169,7 +178,7 @@ class TextFlowerClientAttackerGradientOnline(NumPyClient):
                 logger.log(INFO, f"Client {self.partition_id} (Text): Attack loss logged: {client_metrics}")
 
                 try:
-                    torch.save(self.attack_model.state_dict(), self.attack_state_path)
+                    torch.save(self.attack_model.state_dict(), os.path.join(ATTACK_STATE_DIR, f"attack_state_text.pt"))
                     logger.log(INFO, f"Client {self.partition_id} (Text): Attack model state saved to {self.attack_state_path}")
                 except Exception as e:
                     logger.log(WARN, f"Client {self.partition_id} (Text): Failed to save attack model state: {e}")
@@ -228,7 +237,8 @@ class ImageFlowerClientAttackerGradientOnline(NumPyClient):
         self.attack_model = None
         self.attack_optimizer = None
         self.attack_state_path = None
-        loaded_state = False
+        self.loaded_state = False
+        self.first_step = False
 
         self.victim_encoder = CLIPTextClient().to(self.device)
         self.victim_encoder.eval()
@@ -236,31 +246,31 @@ class ImageFlowerClientAttackerGradientOnline(NumPyClient):
             param.requires_grad = False
 
         if self.config.attack_active_online and self.config.whos_attacking == 'image':
-            self.attack_state_path = os.path.join(ATTACK_STATE_DIR, f"attack_state_image_{self.partition_id}.pt")
+            self.attack_state_path = self.config.attack_state_image
             self.attack_model = AttackFromImageNetWithGradient().to(self.device)
-            loaded_state = False
+            self.loaded_state = False
 
             if os.path.exists(self.attack_state_path):
                 try:
                     self.attack_model.load_state_dict(torch.load(self.attack_state_path, map_location=self.device))
-                    logger.log(INFO, f"Image client {partition_id} loaded attack model state from {self.attack_state_path}")
-                    loaded_state = True
+                    logger.log(INFO, f"Image client {partition_id} loaded saved state attack model state from {self.attack_state_path}")
+                    self.loaded_state = True
                 except Exception as e:
                     logger.log(WARN, f"Image client {partition_id}: Failed to load attack model state from {self.attack_state_path}. Error: {e}")
-                    loaded_state = False
+                    self.loaded_state = False
             elif self.config.attack_model_path and os.path.exists(self.config.attack_model_path):
                 try:
                     self.attack_model.load_state_dict(torch.load(self.config.attack_model_path, map_location=self.device))
-                    loaded_state = True
+                    self.loaded_state = True
                     # self.attack_model.eval() # Set to evaluation mode
                     logger.log(INFO, f"Image client {partition_id} loaded attack model from {self.config.attack_model_path}")
                 except Exception as e:
                     logger.log(WARN, f"Image client {partition_id}: Failed to load attack model from {self.config.attack_model_path}. Error: {e}")
-                    loaded_state = False
+                    self.loaded_state = False
             else:
                 logger.log(WARN, f"Image client {partition_id}: Attack active but model path '{self.config.attack_model_path}' not found or not specified.")
 
-            if loaded_state:
+            if self.loaded_state:
                 self.attack_optimizer = torch.optim.AdamW(self.attack_model.parameters(), lr = self.config.attack_lr)
             else:
                 self.attack_optimizer = None
@@ -317,6 +327,7 @@ class ImageFlowerClientAttackerGradientOnline(NumPyClient):
              return 0.0, 0, {"error": f"Exception getting gradient: {e}"}
 
         if self.attack_model is not None and self.attack_optimizer is not None and server_round < self.config.attack_rounds_to_train_online:
+            logger.log(INFO, "Entering online attack training step for image client.")
             client_metrics["online_attack_trained"] = True
             self.attack_model.train()
             self.attack_optimizer.zero_grad()
@@ -339,7 +350,7 @@ class ImageFlowerClientAttackerGradientOnline(NumPyClient):
                 logger.log(INFO, f"Client {self.partition_id} (Image): Attack loss logged: {client_metrics}")
 
                 try:
-                    torch.save(self.attack_model.state_dict(), self.attack_state_path)
+                    torch.save(self.attack_model.state_dict(), os.path.join(ATTACK_STATE_DIR, f"attack_state_image.pt"))
                     logger.log(INFO, f"Client {self.partition_id} (Image): Attack model state saved to {self.attack_state_path}")
                 except Exception as e:
                     logger.log(WARN, f"Client {self.partition_id} (Image): Failed to save attack model state: {e}")
