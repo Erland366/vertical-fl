@@ -23,8 +23,8 @@ packages = ["."]
 publisher = "flwrlabs"
 
 [tool.flwr.app.components]
-serverapp = "vertical_fl.server_app_attack_gradient:app"
-clientapp = "vertical_fl.client_app_attack_gradient:app"
+serverapp = "vertical_fl.server_app_attack_gradient_online:app"
+clientapp = "vertical_fl.client_app_attack_gradient_online:app"
 
 [tool.flwr.app.config]
 num-server-rounds = 100
@@ -38,8 +38,10 @@ log.run_name = "Attack-SideData{size}" # Use run name template for Wandb
 
 # Attack Configuration
 attack.model_path = "attack_models_text_gradient/attack_model_sidesize_10_loss_cosine.pth"
+attack.rounds_to_train_online = 10
 attack.side_data_size = 10
 attack.whos_attacking = "text"
+attack.attack_lr = 1e-5
 
 log.log_attack_predictions_client = true
 attack.active_online = true             

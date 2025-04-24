@@ -183,3 +183,5 @@ attack_models_image_gradient/
 attack_models_text_gradient/
 attack_plots/
 attack_states/
+plots_comparison/
+plots_attack_comparison/
